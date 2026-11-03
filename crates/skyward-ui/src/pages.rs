@@ -1354,8 +1354,19 @@ fn finished(
                 "The new system is installed to slot {slot}, which starts after a reboot."
             );
             let y = widgets::list(c, t, f, top, &[standing(installed, GREEN, Icon::Install, &detail)]).bottom;
-            let next = widgets::list(c, t, f, y + gap, &[restart]);
-            out.extend(hits(&next.rows, &[Action::RebootTo(Target::System)]));
+            // An update written to the other slot is not merged yet: the
+            // page leads to the merge first, rather than into a system whose
+            // snapshots are still to be merged.
+            let merging = !matches!(cx.info.snapshot, skyward_vab::SnapshotState::None);
+            let (row, act) = match merging {
+                true => (
+                    Row::new(l.pick(["合并更新", "合併更新", "Merge the update"])).icon(ORANGE, Icon::Layers),
+                    Action::Open(Screen::Update),
+                ),
+                false => (restart, Action::RebootTo(Target::System)),
+            };
+            let next = widgets::list(c, t, f, y + gap, &[row]);
+            out.extend(hits(&next.rows, &[act]));
             let y = reflashed(c, cx, next.bottom);
             afterwards_of(c, cx, y, true)
         }
