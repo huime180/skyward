@@ -87,7 +87,13 @@ impl Worker {
                     Task::Check { server, probe, installed } => {
                         let a = http::agent(servers.clone());
                         *using.lock().expect("the agent is not held by a thread that panicked") = Some(a.clone());
-                        let mut answer = release::ask(&a, &server, &installed).map_err(|e| unanswered(&e, &server, &probe, &servers));
+                        // The phone's own updater saw the newest system a
+                        // sealed question does not; where it has written of
+                        // one newer than the installed, that is the answer.
+                        let mut answer = match cached(&installed) {
+                            Some(newest) => Ok(Some(newest)),
+                            None => release::ask(&a, &server, &installed).map_err(|e| unanswered(&e, &server, &probe, &servers)),
+                        };
                         if let Ok(Some(r)) = &mut answer {
                             match release::length(&a, &r.urls[0]) {
                                 Ok(length) => r.length = Some(length),
@@ -136,6 +142,13 @@ impl Drop for Worker {
             thread.join().expect("the update worker does not panic");
         }
     }
+}
+
+/// The newest system the phone's own updater last wrote of, where it wrote
+/// of one newer than the system installed.
+fn cached(installed: &Installed) -> Option<Release> {
+    let xml = std::fs::read_to_string(release::CACHE).ok()?;
+    release::cached(&xml, &installed.version)
 }
 
 /// Why `server` gave no answer: that the network joined wants a login
