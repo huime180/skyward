@@ -1174,17 +1174,13 @@ fn set_slot(slot: skyward_vab::Slot) -> Result<skyward_vab::BootSlots, String> {
     set().map_err(|e| format!("{e:#}"))
 }
 
-/// Start the slot the update went to next, as an install leaves it: the
-/// system there merges what was written, which a recovery from this slot
-/// cannot do.
-fn start_other(app: &mut App) -> Result<()> {
-    let slot = skyward_vab::current_slot()?.context("not an A/B phone")?.other();
+/// Mark `slot` the one that starts next, which the boot control also marks
+/// bootable: an update written there starts from it, as the system's own
+/// updater leaves it.
+fn start_written(slot: skyward_vab::Slot) -> Result<()> {
     let (binder, hardware) = (skyward_binder::driver::Binder::open()?, skyward_binder::driver::Binder::hardware()?);
     let control = skyward_vab::boot::BootControl::open(&binder, &hardware)?;
-    control.set_active(slot)?;
-    skyward_sys::kmsg(&format!("slot {} starts next, which merges the update", slot.letter()))?;
-    app.set_boot_slots(read_slots());
-    Ok(())
+    control.set_active(slot)
 }
 
 /// What has to happen before an update writes over the installed system's
@@ -1640,6 +1636,24 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         if let Some(b) = &backuper {
             fds.push(b.fd());
         }
+        // An image taken out of a package on a thread of its own comes back
+        // here, and the page goes on with it.
+        if let Some(taken) = skyward_ui::app::take_taken() {
+            app.package_taken(taken);
+            // An image taken out to be flashed is handed to the installer at
+            // once, as a chosen image file is.
+            // The image is kept until it is really handed over: a transfer
+            // under way, or an installer already running, would otherwise
+            // lose it.
+            if let Some(path) = app.state.pending_flash.clone() {
+                if installer.is_none() && withhold(&mut transfer, &mut app, now)? {
+                    installer = Some(Installer::open(PathBuf::from(&path), detach(cfg.services.clone()), install_options(&app))?);
+                    app.state.pending_flash = None;
+                    app.show_install();
+                    skyward_sys::kmsg(&format!("package: {path} goes to the installer"))?;
+                }
+            }
+        }
         if let Some(m) = &merger {
             fds.push(m.fd());
         }
@@ -1718,6 +1732,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Told::Reboot(target) => rescue_leaves = Some(rescue_target(target)),
                     _ => {}
+                }
+                // An update the install wrote is the one that starts next,
+                // as the system's own updater leaves it: the boot control
+                // marks the slot active and bootable.
+                if let Told::Finished(Outcome::Installed { slot, .. }) = &ev {
+                    match start_written(*slot) {
+                        Ok(()) => skyward_sys::kmsg(&format!("install: slot {} starts next", slot.letter()))?,
+                        Err(e) => skyward_sys::kmsg(&format!("install: slot {} is not set to start: {e:#}", slot.letter()))?,
+                    }
+                    app.set_boot_slots(read_slots());
                 }
                 app.install(ev, now);
                 if finished {
@@ -2286,12 +2310,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Effect::ReadSlots => app.set_boot_slots(read_slots()),
                     Effect::SetSlot(slot) => app.slot_switched(set_slot(slot), now),
-                    // The slot the update went to starts next, whether or not
-                    // a merge waits: the system there merges it.
-                    Effect::BootOther => match start_other(app) {
-                        Ok(()) => {}
-                        Err(e) => app.report(&format!("{e:#}"), now),
-                    },
                     // The decrypt page shows meanwhile that the work is
                     // under way, and takes nothing more until it is done.
                     Effect::OpenData => {

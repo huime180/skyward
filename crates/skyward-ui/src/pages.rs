@@ -72,13 +72,12 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Modules => modules(cx),
         Screen::ModuleInfo => module_info(cx),
         Screen::Choose(place) => choose(cx, place),
-        Screen::ChooseRoot(place) => choose_root(cx, place),
-        Screen::ChooseImage(place) => choose_image(cx, place),
-        Screen::RootDownload => root_download(cx),
+                Screen::RootDownload => root_download(cx),
         Screen::RootConfirm => root_confirm(cx),
         Screen::RootInstalled => root_installed(cx),
         Screen::RootManagers => root_managers(cx),
         Screen::RootImages => root_images(cx),
+    Screen::PackageImages => package_images(cx),
         Screen::RootDirect => root_direct(cx),
         Screen::Installing => installing(cx),
         Screen::About => about(cx),
@@ -850,9 +849,16 @@ pub fn install(cx: &Ctx) -> Frame {
     rows.push(Row::new(install_title(l, Source::File(Place::UsbDrive))).icon(PURPLE, Icon::UsbDrive).subtitle(l.pick(usb)));
     let sideload = l.pick(["在电脑上运行 adb sideload", "在電腦上執行 adb sideload", "Run adb sideload on the computer"]);
     rows.push(Row::new(install_title(l, Source::Computer)).icon(GREEN, Icon::Usb).subtitle(sideload));
+    // A whole system package taken apart: each partition comes out as an
+    // image, which is flashed on its own, as a chosen image is.
+    rows.push(
+        Row::new(l.pick(["从完整系统包解析", "從完整系統包解析", "Take a system package apart"]))
+            .icon(PURPLE, Icon::Layers)
+            .subtitle(l.pick(["取出各分区镜像，点一个进入刷入页", "取出各分割區映像檔，點一個進入刷入頁", "each partition comes out as an image to flash"])),
+    );
     let methods = widgets::list(&mut c, t, f, y, &rows);
     let from_usb = Action::Open(Screen::Choose(Place::UsbDrive));
-    let mut out = hits(&methods.rows[methods.rows.len() - 3..], &[from_storage, from_usb, Action::Sideload]);
+    let mut out = hits(&methods.rows[methods.rows.len() - 4..], &[from_storage, from_usb, Action::Sideload, Action::OpenPackageParts]);
     let what = l.pick([
         "支持安装 A/B 完整更新包和带安装脚本的刷机包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分区镜像。系统更新将安装到另一个槽位，重启后从该槽位启动。选择文件时仅列出文件夹以及 .zip、.img 文件。",
         "支援安裝 A/B 完整更新檔和帶有安裝指令碼的刷機包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分割區映像檔。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
@@ -929,7 +935,7 @@ fn partition_note(l: Lang, name: &str) -> &'static str {
         "multiimgqti" => l.pick(["多镜像清单", "多映像清單", "the multi-image table"]),
         "persist" => l.pick(["出厂数据：传感器校准、WLAN 地址", "出廠資料：感測器校準、WLAN 位址", "factory data: sensor calibration and the WLAN address"]),
         "qupfw" => l.pick(["QUPv3 固件", "QUPv3 固件", "the QUPv3 firmware"]),
-        "recovery" => l.pick(["恢复模式镜像，Skyward 自己住在这里", "恢復模式映像，Skyward 自己住在這裡", "the recovery image, which is where Skyward lives"]),
+        "recovery" => l.pick(["Skyward 所在位置", "Skyward 所在位置", "where Skyward lives"]),
         "tz" => l.pick(["TrustZone TEE 镜像", "TrustZone TEE 映像", "the TrustZone TEE image"]),
         "uefisecapp" => l.pick(["UEFI secapp", "UEFI secapp", "the UEFI secure app"]),
         "vbmeta" => l.pick(["AVB 主签名元数据", "AVB 主簽章中繼資料", "the AVB main metadata"]),
@@ -1488,35 +1494,24 @@ fn finished(
         Source::Rescue => (Row::new(l.pick(["退出救援模式", "結束救援模式", "Leave rescue mode"])).icon(GREEN, Icon::Usb), Action::Back),
     };
     let restart = Row::new(l.pick(["重启到系统", "重新啟動到系統", "Reboot to system"])).icon(ORANGE, Icon::Power);
-    let installed = l.pick(["安装成功", "安裝成功", "Installed"]);
+    let installed = l.pick(["安装完成", "安裝完成", "Installed"]);
     let nothing_written = l.pick(["未写入任何内容。", "未寫入任何內容。", "Nothing was written."]);
     match outcome {
         Outcome::Installed { slot, .. } => {
             let slot = slot.letter();
             let detail = tr!(
                 l,
-                "新系统已安装到槽位 {slot}，重启后将从该槽位启动。",
-                "新系統已安裝到槽位 {slot}，重新啟動後將從該槽位啟動。",
-                "The new system is installed to slot {slot}, which starts after a reboot."
+                "新系统安装在槽位 {slot}，重启后从这个槽位启动。",
+                "新系統安裝在槽位 {slot}，重新啟動後從這個槽位啟動。",
+                "The new system is installed to slot {slot}, and starts from it after a reboot."
             );
             let y = widgets::list(c, t, f, top, &[standing(installed, GREEN, Icon::Install, &detail)]).bottom;
-            // An update written to the other slot is not merged yet: the
-            // page leads to the merge first, rather than into a system whose
-            // snapshots are still to be merged.
-            let merging = !matches!(cx.info.snapshot, skyward_vab::SnapshotState::None);
-            let (row, act) = match merging {
-                true => (
-                    Row::new(l.pick(["重启到另一槽位的恢复模式", "重新啟動到另一槽位的復原模式", "Restart into the other slot's recovery"]))
-                        .subtitle(l.pick(["重启后在「系统更新」页滑动合并", "重新啟動後在「系統更新」頁滑動合併", "Merge there by swiping on the update page"]))
-                        .icon(ORANGE, Icon::Power),
-                    Action::BootOther,
-                ),
-                false => (restart, Action::RebootTo(Target::System)),
-            };
-            let next = widgets::list(c, t, f, y + gap, &[row]);
-            out.extend(hits(&next.rows, &[act]));
-            let y = reflashed(c, cx, next.bottom);
-            afterwards_of(c, cx, y, true)
+            // The slot the update was written to starts next, set as the
+            // install finished: the page offers the restart the system's own
+            // updater offers, and nothing else.
+            let next = widgets::list(c, t, f, y + gap, &[restart]);
+            out.extend(hits(&next.rows, &[Action::RebootTo(Target::System)]));
+            next.bottom
         }
         Outcome::Flashed { partition, slots } => {
             let slots = fmt::slots(l, slots);
@@ -2260,13 +2255,13 @@ pub fn root(cx: &Ctx) -> Frame {
             Some((name, Some(kind))) => format!("{name} {}：{}", l.pick(["已修补", "已修補", "patched"]), kind.name()),
             _ => l.pick(["未 root", "未 root", "not rooted"]).to_string(),
         };
-        facts.push((l.pick(["root", "root", "root"]), said));
+        facts.push((l.pick(["root 方式", "root 方式", "Root"]), said));
     }
     let mut y = widgets::section_first(&mut c, t, f, top, l.pick(["本机", "本機", "This phone"]));
     y = widgets::info_card(&mut c, t, f, y, &facts);
 
     // What the patch takes: a manager and an image, then the patch itself.
-    y = widgets::section(&mut c, t, f, y, l.pick(["修补方式", "修補方式", "Ways to patch"]));
+    y = widgets::section(&mut c, t, f, y, l.pick(["修补并安装", "修補並安裝", "Patch and install"]));
     let bar = [
         Row::new(l.pick(["管理器", "管理器", "Manager"])).trail(Trail::Choice(s.root_manager_way.name(l))),
         Row::new(l.pick(["镜像文件", "映像檔", "Image"])).trail(Trail::Choice(s.root_image_way.name(l))),
@@ -2322,7 +2317,7 @@ pub fn root_managers(cx: &Ctx) -> Frame {
             .subtitle(l.pick(["带有管理器库的应用", "帶有管理器庫的應用", "an app that carries a manager's library"]))
             .trail(Trail::Check(way == crate::app::ManagerWay::Installed)),
         Row::new(l.pick(["从内部存储选择", "從內部儲存空間選擇", "Choose from internal storage"]))
-            .subtitle(l.pick(["只列出安装包", "只列出安裝包", "only packages are listed"]))
+            .subtitle(l.pick(["选择管理器的安装包", "選擇管理器的安裝包", "choose the manager's package"]))
             .trail(Trail::Check(way == crate::app::ManagerWay::Storage)),
         Row::new(l.pick(["网络下载", "網路下載", "Download one"]))
             .subtitle("KernelSU、SukiSU")
@@ -2363,21 +2358,24 @@ pub fn root_images(cx: &Ctx) -> Frame {
     let way = s.root_image_way;
     let file_line = match &s.root_image {
         crate::app::RootImage::File(at) => file_name(at),
-        crate::app::RootImage::Partition => l.pick(["从内部储存选择", "從內部儲存空間選擇", "choose one on the phone"]).to_string(),
+        crate::app::RootImage::Partition => l.pick(["从内部存储选择", "從內部儲存空間選擇", "choose one on the phone"]).to_string(),
     };
     let rows = [
-        Row::new(l.pick(["直接安装", "直接安裝", "This phone's image"]))
+        Row::new(l.pick(["本机镜像", "本機鏡像", "This phone's image"]))
             .subtitle(partition)
             .trail(Trail::Check(way == crate::app::ImageWay::Direct)),
         Row::new(l.pick(["选择镜像文件进行修补", "選擇映像檔進行修補", "Patch an image file"]))
             .subtitle(&file_line)
             .trail(Trail::Check(way == crate::app::ImageWay::File)),
         Row::new(l.pick(["从完整系统包解析", "從完整系統包解析", "Take one from a system package"]))
-            .subtitle(l.pick(["尚未支持", "尚未支援", "not yet"]))
-            .trail(Trail::None),
+            .subtitle(match way {
+                crate::app::ImageWay::Package => file_line.as_str(),
+                _ => l.pick(["取出包内的 boot 与 init_boot", "取出包內的 boot 與 init_boot", "boot and init_boot come out of it"]),
+            })
+            .trail(Trail::Check(way == crate::app::ImageWay::Package)),
     ];
     let listed = widgets::list(&mut c, t, f, top, &rows);
-    out.extend(hits(&listed.rows[..2], &[Action::Open(Screen::RootDirect), Action::OpenPatchImage]));
+    out.extend(hits(&listed.rows, &[Action::Open(Screen::RootDirect), Action::OpenPatchImage, Action::OpenSystemPackage]));
     let y = widgets::footnote(
         &mut c,
         t,
@@ -2399,27 +2397,123 @@ pub fn root_direct(cx: &Ctx) -> Frame {
     let mut c = long_page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    let title = l.pick(["直接安装", "直接安裝", "This phone's image"]);
+    let title = l.pick(["本机镜像", "本機鏡像", "This phone's image"]);
+    // The slot the phone runs from, whose image a patch takes, and the other
+    // slot beside it: both are named with the slot they belong to.
+    let now = skyward_vab::current_slot().ok().flatten();
+    let letter = now.map(|slot| slot.letter()).unwrap_or("A");
+    let facts = [(l.pick(["当前槽位", "當前槽位", "Slot"]), letter.to_string())];
+    let mut y = widgets::info_card(&mut c, t, f, top, &facts);
     let parts = crate::app::root_partitions();
     let chosen = s.root_partition.unwrap_or("init_boot");
-    let rows: Vec<Row> = parts
-        .iter()
-        .map(|name| Row::new(name).subtitle(partition_note(l, name)).trail(Trail::Check(*name == chosen)))
-        .collect();
-    let listed = widgets::list(&mut c, t, f, top, &rows);
-    let picks: Vec<Action> = (0..rows.len()).map(|at| Action::Toggle(Switch::RootPartition(at))).collect();
-    out.extend(hits(&listed.rows, &picks));
+    // Every name the page lists, made first so the rows can borrow them.
+    let mut names: Vec<(String, String, bool)> = Vec::new();
+    for slot in [skyward_vab::Slot::A, skyward_vab::Slot::B] {
+        let here = now == Some(slot);
+        for name in &parts {
+            names.push((format!("{name}{}", slot.suffix()), (*name).to_string(), here));
+        }
+    }
+    let per = parts.len();
+    for (at, slot) in [skyward_vab::Slot::A, skyward_vab::Slot::B].into_iter().enumerate() {
+        let here = now == Some(slot);
+        let label = match here {
+            true => format!("{} {} ({})", l.pick(["槽位", "槽位", "Slot"]), slot.letter(), l.pick(["当前", "當前", "now"])),
+            false => format!("{} {}", l.pick(["槽位", "槽位", "Slot"]), slot.letter()),
+        };
+        y = widgets::section(&mut c, t, f, y, &label);
+        let listed: Vec<Row> = names[at * per..(at + 1) * per]
+            .iter()
+            .map(|(title, base, here)| {
+                Row::new(title.as_str())
+                    .subtitle(partition_note(l, base.as_str()))
+                    .trail(Trail::Check(*here && base == chosen))
+            })
+            .collect();
+        let rows = widgets::list(&mut c, t, f, y, &listed);
+        if here {
+            let picks: Vec<Action> = (0..listed.len()).map(|at| Action::Toggle(Switch::RootPartition(at))).collect();
+            out.extend(hits(&rows.rows, &picks));
+        }
+        y = rows.bottom;
+    }
     let y = widgets::footnote(
         &mut c,
         t,
         f,
-        listed.bottom,
+        y,
         l.pick([
             "选中的分区现用镜像交给管理器修补，再写回该分区。",
             "選中的分割區現用映像交給管理器修補，再寫回該分割區。",
             "The image the partition holds is patched by the manager and written back to it.",
         ]),
     );
+    Frame::new(t, fit(c, t, y), out, title, top)
+}
+
+/// The images a system package holds: each is named by its partition and
+/// its size, and picking one either patches with it or flashes it on its own.
+pub fn package_images(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let title = l.pick(["包内镜像", "包內映像檔", "Images in the package"]);
+    // An image being taken out says how far it has come, over the list.
+    let mut y = top;
+    if let Some((name, done, all)) = crate::app::taking() {
+        let share = match all {
+            0 => 0.0,
+            _ => done as f32 / all as f32,
+        };
+        let detail = format!("{} / {}", fmt::bytes(done), fmt::bytes(all));
+        y = widgets::progress_card(&mut c, t, f, y, &format!("正在提取 {name}"), &detail, Some(share));
+    }
+    if let Some(path) = s.pending_flash.clone() {
+        let row = Row::new(l.pick(["已提取，进入刷入页", "已提取，進入刷入頁", "Taken out: flash it"]))
+            .subtitle(path.as_str())
+            .trail(Trail::Arrow);
+        let block = widgets::list(&mut c, t, f, y, &[row]);
+        out.extend(hits(&block.rows, &[Action::FlashTaken]));
+        y = block.bottom;
+    }
+    let listed = s.package_list.clone().unwrap_or_default();
+    if listed.is_empty() {
+        let said = s
+            .package_said
+            .clone()
+            .unwrap_or_else(|| l.pick(["这个包没有可提取的镜像", "這個包沒有可提取的映像檔", "the package holds no image to take out"]).to_string());
+        let y = widgets::paragraph(&mut c, t, f, top, &said);
+        return Frame::new(t, fit(c, t, y), out, title, top);
+    }
+    // What went wrong, or what is not carried out, sits above the list: a
+    // long list would otherwise hide it.
+    if let Some(said) = s.package_said.clone() {
+        y = widgets::paragraph(&mut c, t, f, y, &said);
+    }
+    let sizes: Vec<String> = listed.iter().map(|(_, size)| fmt::bytes(*size)).collect();
+    let rows: Vec<Row> = listed
+        .iter()
+        .enumerate()
+        .map(|(at, (name, _))| Row::new(name.as_str()).subtitle(sizes[at].as_str()).trail(Trail::Arrow))
+        .collect();
+    let block = widgets::list(&mut c, t, f, y, &rows);
+    let picks: Vec<Action> = (0..rows.len()).map(Action::PickPackageImage).collect();
+    out.extend(hits(&block.rows, &picks));
+    let y = block.bottom;
+    let note = match s.package_mode {
+        Some(crate::app::PackageMode::Flash) => l.pick([
+            "选一个镜像，抽取后进入刷入页写入分区。",
+            "選一個映像檔，抽取後進入刷入頁寫入分割區。",
+            "Choose one: it is taken out, then flashed to a partition.",
+        ]),
+        _ => l.pick([
+            "选一个镜像，抽取后作为修补要写的镜像。",
+            "選一個映像檔，抽取後作為修補要寫的映像檔。",
+            "Choose one: it is taken out, then patched and written.",
+        ]),
+    };
+    let y = widgets::footnote(&mut c, t, f, y, note);
     Frame::new(t, fit(c, t, y), out, title, top)
 }
 
@@ -3330,7 +3424,7 @@ pub fn root_confirm(cx: &Ctx) -> Frame {
     let mut c = page(cx);
     let mut out = Vec::new();
     let top = t.m.content_top;
-    let title = l.pick(["修补 root", "修補 root", "Patch root"]);
+    let title = l.pick(["修补并安装", "修補並安裝", "Patch and install"]);
     let partition = s.root_partition.unwrap_or("init_boot");
     // What the way chosen comes to, in the manager it runs and the file it
     // takes, beside the way itself.
@@ -3340,7 +3434,11 @@ pub fn root_confirm(cx: &Ctx) -> Frame {
             None => s.root_manager_way.name(l).to_string(),
         },
         crate::app::RootSource::Apk(at) => {
-            format!("{}（{}）", s.root_manager_way.name(l), file_name(at))
+            // A manager the phone has is named by its package, not by the
+            // path of the `base.apk` it was installed from.
+            let known = skyward_root::installed::installed().unwrap_or_default();
+            let shown = known.iter().find(|app| app.apk == Path::new(at)).map(|app| app.label()).unwrap_or_else(|| file_name(at));
+            format!("{}（{}）", s.root_manager_way.name(l), shown)
         }
     };
     let image = match &s.root_image {
@@ -3576,60 +3674,6 @@ pub fn root_download(cx: &Ctx) -> Frame {
     Frame::new(t, fit(c, t, y), out, title, top)
 }
 
-/// A place's folders and the packages in them, to choose one to patch root
-/// with: the same rows as a place to install from, under another name.
-pub fn choose_root(cx: &Ctx, place: Place) -> Frame {
-    let (s, l) = (cx.state, cx.state.lang);
-    let empty = l.pick(["这里没有安装包", "這裡沒有安裝包", "No packages here"]);
-    let absent = match (place, s.data.storage_open()) {
-        (Place::Storage, false) => Some((
-            l.pick(["需先完成「解密」", "需先完成「解密」", "Decrypt first"]),
-            l.pick([
-                "内部存储的文件夹在 data 分区打开后才读得到。",
-                "內部儲存空間的資料夾在 data 分割區開啟後才讀得到。",
-                "The folders of internal storage are read once the data partition is open.",
-            ]),
-        )),
-        _ => None,
-    };
-    listing(
-        cx,
-        s.folder(Screen::ChooseRoot(place)),
-        place_name(l, place),
-        absent,
-        empty,
-        Action::ChooseEntry,
-        l.pick(["选择安装包", "選擇安裝包", "Choose a package"]),
-    )
-}
-
-/// A place's folders and the images in them, to write one as it is or to
-/// patch one: the same rows as a place to install from, under another name.
-pub fn choose_image(cx: &Ctx, place: Place) -> Frame {
-    let (s, l) = (cx.state, cx.state.lang);
-    let empty = l.pick(["这里没有镜像文件", "這裡沒有映像檔", "No images here"]);
-    let absent = match (place, s.data.storage_open()) {
-        (Place::Storage, false) => Some((
-            l.pick(["需先完成「解密」", "需先完成「解密」", "Decrypt first"]),
-            l.pick([
-                "内部存储的文件夹在 data 分区打开后才读得到。",
-                "內部儲存空間的資料夾在 data 分割區開啟後才讀得到。",
-                "The folders of internal storage are read once the data partition is open.",
-            ]),
-        )),
-        _ => None,
-    };
-    listing(
-        cx,
-        s.folder(Screen::ChooseImage(place)),
-        place_name(l, place),
-        absent,
-        empty,
-        Action::ChooseEntry,
-        l.pick(["选择镜像文件", "選擇映像檔", "Choose an image"]),
-    )
-}
-
 /// A folder laid out as the stock file manager lays one out: the path as
 /// capsules from `top`, held under the bar once scrolled there, then the
 /// entries in one list on the plain page, each row drawn as it scrolls into
@@ -3670,7 +3714,7 @@ fn listing(
 /// drawn as the row comes into view.
 pub fn row(screen: Screen, cx: &Ctx, i: usize, c: &mut Canvas) {
     match screen {
-        Screen::Files | Screen::Choose(_) | Screen::ChooseRoot(_) => {
+        Screen::Files | Screen::Choose(_) => {
             let folder = cx.state.folder(screen);
             let entries = folder.entries.as_ref().expect("a folder listed draws its rows");
             files::row(c, cx.t, cx.f, cx.state.lang, &entries[i], folder.listed, cx.state.time_zone);
