@@ -962,6 +962,15 @@ fn set_slot(slot: skyward_vab::Slot) -> Result<skyward_vab::BootSlots, String> {
     set().map_err(|e| format!("{e:#}"))
 }
 
+/// Mark `slot` the one that starts next, which the boot control also marks
+/// bootable: an update written there starts from it, as the system's own
+/// updater leaves it.
+fn start_written(slot: skyward_vab::Slot) -> Result<()> {
+    let (binder, hardware) = (skyward_binder::driver::Binder::open()?, skyward_binder::driver::Binder::hardware()?);
+    let control = skyward_vab::boot::BootControl::open(&binder, &hardware)?;
+    control.set_active(slot)
+}
+
 /// What has to happen before an update writes over the installed system's
 /// partitions: the files the phone's own programs run from stay in memory,
 /// and the booted slot's partitions come off.
@@ -1553,6 +1562,24 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         if let Some(b) = &backuper {
             fds.push(b.fd());
         }
+        // An image taken out of a package on a thread of its own comes back
+        // here, and the page goes on with it.
+        if let Some(taken) = skyward_ui::app::take_taken() {
+            app.package_taken(taken);
+            // An image taken out to be flashed is handed to the installer at
+            // once, as a chosen image file is.
+            // The image is kept until it is really handed over: a transfer
+            // under way, or an installer already running, would otherwise
+            // lose it.
+            if let Some(path) = app.state.pending_flash.clone() {
+                if installer.is_none() && withhold(&mut transfer, &mut app, now)? {
+                    installer = Some(Installer::open(PathBuf::from(&path), detach(cfg.services.clone()), install_options(&app))?);
+                    app.state.pending_flash = None;
+                    app.show_install();
+                    skyward_sys::kmsg(&format!("package: {path} goes to the installer"))?;
+                }
+            }
+        }
         if let Some(m) = &merger {
             fds.push(m.fd());
         }
@@ -1628,6 +1655,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Told::Reboot(target) => rescue_leaves = Some(rescue_target(target)),
                     _ => {}
+                }
+                // An update the install wrote is the one that starts next,
+                // as the system's own updater leaves it: the boot control
+                // marks the slot active and bootable.
+                if let Told::Finished(Outcome::Installed { slot, .. }) = &ev {
+                    match start_written(*slot) {
+                        Ok(()) => skyward_sys::kmsg(&format!("install: slot {} starts next", slot.letter()))?,
+                        Err(e) => skyward_sys::kmsg(&format!("install: slot {} is not set to start: {e:#}", slot.letter()))?,
+                    }
+                    app.set_boot_slots(read_slots());
                 }
                 app.install(ev, now);
                 if finished {

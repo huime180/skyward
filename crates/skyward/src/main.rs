@@ -79,6 +79,17 @@ enum Cmd {
     Reboot { target: String },
     /// Print the bootloader control block in misc.
     Bcb,
+    /// Print what an update package's payload holds: the partitions it
+    /// writes, how large each is, and how many steps make it.
+    Payload { package: String },
+    /// Write an update package's partitions straight into a slot, without
+    /// the snapshots update_engine keeps.
+    Write {
+        package: String,
+        /// The slot to write into, `a` or `b`.
+        #[arg(long)]
+        slot: String,
+    },
     /// Print the logical partition metadata in super.
     Lp {
         /// The super partition, or an image of its start.
@@ -211,6 +222,52 @@ enum Cmd {
     },
 }
 
+/// Prints the partitions an update package's payload writes.
+fn payload(path: &str) -> Result<()> {
+    let mut file = std::fs::File::open(path).map_err(|e| anyhow!("open {path}: {e}"))?;
+    let update = match skyward_install::package::identify(&mut file)? {
+        skyward_install::package::Package::Update(update) => update,
+        _ => anyhow::bail!("{path} holds no update payload"),
+    };
+    let manifest = skyward_install::payload::read(&mut file, update.payload_offset, update.payload_size)?;
+    println!("payload {} bytes at {}, blocks of {}", update.payload_size, update.payload_offset, manifest.block());
+    for partition in &manifest.partitions {
+        let how = match partition.carried() {
+            true => String::new(),
+            false => String::from(" (a step this code does not carry out)"),
+        };
+        println!("{}: {} bytes, {} steps{how}", partition.name, partition.size, partition.operations.len());
+    }
+    Ok(())
+}
+
+/// Writes an update package's partitions into a slot.
+#[cfg(target_os = "android")]
+fn write_payload(path: &str, slot: &str) -> Result<()> {
+    let slot = match slot {
+        "a" | "A" => skyward_vab::Slot::A,
+        "b" | "B" => skyward_vab::Slot::B,
+        other => anyhow::bail!("unknown slot {other:?}"),
+    };
+    let mut file = std::fs::File::open(path).map_err(|e| anyhow!("open {path}: {e}"))?;
+    let update = match skyward_install::package::identify(&mut file)? {
+        skyward_install::package::Package::Update(update) => update,
+        _ => anyhow::bail!("{path} holds no update payload"),
+    };
+    let left = skyward_install::direct::write(
+        Path::new(path),
+        &update,
+        Path::new("/dev/block/by-name"),
+        slot,
+        &mut |name, at, total| println!("{}/{total} {name}", at + 1),
+    )?;
+    for name in left {
+        println!("{name} is left as it is: the package writes it in a way this code does not carry out");
+    }
+    println!("written to slot {}", slot.letter());
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // init starts the recovery service by path with no arguments.
     let started_as = std::env::args_os().next().unwrap_or_default();
@@ -240,6 +297,11 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
+        Cmd::Payload { package } => payload(&package),
+        #[cfg(target_os = "android")]
+        Cmd::Write { package, slot } => write_payload(&package, &slot),
+        #[cfg(not(target_os = "android"))]
+        Cmd::Write { .. } => anyhow::bail!("writing a package's partitions needs the recovery"),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);

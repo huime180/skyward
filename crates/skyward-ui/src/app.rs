@@ -40,6 +40,28 @@ pub enum Screen {
     /// Mounting and unmounting the slot's partitions.
     Mount,
     Install,
+    /// The partitions an install keeps as they are, a switch each.
+    Keep,
+    /// Patching the boot image the phone's root manager patches.
+    Root,
+    /// Downloading a root manager's package from its releases.
+    RootDownload,
+    /// What a patch with the package chosen would do, and the swipe that
+    /// does it.
+    RootConfirm,
+    /// The managers the data partition holds, which a patch can run.
+    RootInstalled,
+    /// The partitions an image of the phone's own is written to.
+    RootDirect,
+    /// The ways to a manager, and to an image.
+    RootManagers,
+    RootImages,
+    /// The images taken out of a system package, to pick one of.
+    PackageImages,
+    /// The modules the phone's root manager has.
+    Modules,
+    /// One module: what it says of itself, and what can be done with it.
+    ModuleInfo,
     /// A place's folders and the files in them that can be installed, to
     /// choose one.
     Choose(Place),
@@ -328,12 +350,18 @@ pub enum UsbDrive {
 }
 
 /// Where the package being installed comes from.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+impl Default for Source {
+    fn default() -> Source {
+        Source::File(Place::Storage)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     /// The computer, with `adb sideload`.
-    #[default]
     Computer,
-    /// A file chosen in a place.
+    /// A file chosen in a place: the page opens on internal storage, where
+    /// most installs come from.
     File(Place),
     /// A file opened in the file manager; `drive` for one on the USB drive.
     Opened { drive: bool },
@@ -1159,6 +1187,147 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
     (["美国太平洋时间", "美國太平洋時間", "Pacific Time"], ["洛杉矶", "洛杉磯", "Los Angeles"], "America/Los_Angeles"),
 ];
 
+/// What the download page says while a package is on its way.
+/// The partitions an image of the phone's own is written to, in the order a
+/// page lists them: those the phone has.
+pub fn root_partitions() -> Vec<&'static str> {
+    let slot = skyward_vab::current_slot().ok().flatten();
+    let by_name = std::path::Path::new(skyward_root::BY_NAME);
+    ["boot", "init_boot"]
+        .into_iter()
+        .filter(|name| match slot {
+            Some(slot) => by_name.join(format!("{name}{}", slot.suffix())).exists(),
+            None => true,
+        })
+        .collect()
+}
+
+/// What a folder opened from a page of the root's own is picking.
+/// How far the taking of an image out of a package has come: the image's
+/// name, the bytes written, and how many there are in all.
+static TAKING: std::sync::Mutex<Option<(String, u64, u64)>> = std::sync::Mutex::new(None);
+
+/// What came of the last one: the file its image went to, or why it did not.
+static TAKEN: std::sync::Mutex<Option<Result<String, String>>> = std::sync::Mutex::new(None);
+
+/// How far the image being taken out of a package has come, if one is.
+pub fn taking() -> Option<(String, u64, u64)> {
+    TAKING.lock().ok().and_then(|held| held.clone())
+}
+
+/// What came of it, once it has: taken by the caller, so it is only seen once.
+pub fn take_taken() -> Option<Result<String, String>> {
+    TAKEN.lock().ok().and_then(|mut held| held.take())
+}
+
+/// The partitions an install writes an image to, by the names a package
+/// gives them.
+const FLASHABLE: [&str; 6] = ["boot", "init_boot", "vendor_boot", "recovery", "dtbo", "vbmeta"];
+
+/// Where a package sits and how its steps count: its path, the offset its
+/// payload begins at, its size, and the block size.
+type PackageFile = (String, u64, u64, u64);
+
+/// The partitions a package holds, by name and size.
+type PackageList = Vec<(String, u64)>;
+
+/// What the images taken out of a package are on show for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageMode {
+    /// One of them is the image the patch writes.
+    Patch,
+    /// One of them is flashed on its own.
+    Flash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootPick {
+    /// The manager a patch runs with.
+    Manager,
+    /// The image a patch writes.
+    Image,
+    /// A whole system package, whose boot and init_boot are taken out of it.
+    Package,
+    /// A whole system package, every partition of which comes out to be
+    /// flashed on its own.
+    Parts,
+}
+
+/// Where the patcher a root patch runs comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RootSource {
+    /// The manager the phone has, in its folder on the data partition.
+    #[default]
+    Installed,
+    /// An APK the user picked.
+    Apk(String),
+}
+
+/// Where the image a patch writes comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RootImage {
+    /// The image the partition holds now.
+    #[default]
+    Partition,
+    /// An image file the user picked.
+    File(String),
+}
+
+/// The way to a manager the page took, which its row shows a check for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ManagerWay {
+    /// No way taken yet.
+    #[default]
+    None,
+    /// The manager the phone has, under the data partition.
+    LastUsed,
+    /// An app whose package carries a manager's library.
+    Installed,
+    /// A package on the phone.
+    Storage,
+    /// A package downloaded from the manager's own repository.
+    Download,
+}
+
+impl ManagerWay {
+    /// What the page calls it, in the bar that starts the patch.
+    pub fn name(self, l: Lang) -> &'static str {
+        match self {
+            ManagerWay::None => l.pick(["未选择", "未選擇", "none"]),
+            ManagerWay::LastUsed => l.pick(["上次使用的管理器", "上次使用的管理器", "The manager used last time"]),
+            ManagerWay::Installed => l.pick(["从已安装管理器中选择", "從已安裝管理器中選擇", "An installed manager"]),
+            ManagerWay::Storage => l.pick(["从内部存储选择", "從內部儲存空間選擇", "From internal storage"]),
+            ManagerWay::Download => l.pick(["网络下载", "網路下載", "Downloaded"]),
+        }
+    }
+}
+
+/// The way to an image the page took.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageWay {
+    /// No way taken yet.
+    #[default]
+    None,
+    /// The image the partition holds now, for the partition chosen.
+    Direct,
+    /// An image file the user picked.
+    File,
+    /// An image out of a system package.
+    Package,
+}
+
+impl ImageWay {
+    /// What the page calls it, in the bar that starts the patch.
+    pub fn name(self, l: Lang) -> &'static str {
+        match self {
+            ImageWay::None => l.pick(["未选择", "未選擇", "none"]),
+            ImageWay::Direct => l.pick(["本机镜像", "本機鏡像", "This phone's image"]),
+            ImageWay::File => l.pick(["选择镜像文件进行修补", "選擇映像檔進行修補", "An image file"]),
+            ImageWay::Package => l.pick(["从完整系统包解析", "從完整系統包解析", "A system package"]),
+        }
+    }
+}
+
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -1183,6 +1352,19 @@ pub enum Action {
     Confirm(Confirm),
     /// The pattern grid on the unlock page.
     Pattern,
+    /// Patch with the package a download left at this place in the list.
+    RootPackage(usize),
+    /// Pick a whole system package to take boot and init_boot out of.
+    OpenSystemPackage,
+    /// Pick a whole system package to take every partition out of, to flash
+    /// one of them.
+    OpenPackageParts,
+    /// Pick the image taken out of a package at this place in the list.
+    PickPackageImage(usize),
+    /// Flash the image that was taken out of a package.
+    FlashTaken,
+    /// Open the proxy page, holding the one every request goes through now.
+    OpenProxy,
     /// Start receiving a package over USB.
     Sideload,
     /// Send the image to one of the partitions it fits.
@@ -1621,6 +1803,58 @@ pub struct State {
     /// Skyward goes back into the recovery partitions an install writes
     /// over.
     pub keep_recovery: bool,
+    /// Which manager and tier the download page offers.
+    pub root_variant: usize,
+    /// Which tier of it: stable or dev.
+    pub root_tier: usize,
+    /// Which way to GitHub a download goes by.
+    pub root_proxy: usize,
+    /// Whether an install patches the slot it writes into with the phone's
+    /// root manager.
+    pub keep_root: bool,
+    /// The partitions an install keeps as they are, by name.
+    pub keep_partitions: Vec<String>,
+    /// The manager the phone has, as the root page names it.
+    pub root_manager: Option<String>,
+    /// What the root page says of the last patch.
+    pub root_said: Option<String>,
+    /// The partition the root page patches; the one the phone uses, unless
+    /// it was changed.
+    pub root_partition: Option<&'static str>,
+    /// Which image a patch writes: the partition's own, or a file.
+    pub root_image: RootImage,
+    /// What the folder on show is picking, where a page of the root's own
+    /// opened it: the install page's own folder otherwise.
+    pub root_pick: Option<RootPick>,
+    /// What the images on show are for: the patch, or a flash of their own.
+    pub package_mode: Option<PackageMode>,
+    /// The package the images come from: its path, where its payload sits,
+    /// how large it is, and the blocks its steps count in.
+    pub package_file: Option<(String, u64, u64, u64)>,
+    /// The partitions the package holds, by name and size.
+    pub package_list: Option<Vec<(String, u64)>>,
+    /// An image taken out of a package, waiting to be flashed.
+    pub pending_flash: Option<String>,
+    /// Why a package could not be taken apart, for the install page.
+    pub package_said: Option<String>,
+    /// The network being joined with the key the phone keeps for it, which a
+    /// refusal of asks a password for instead.
+    pub saved_try: Option<skyward_net::wlan::Network>,
+    /// The way to the manager chosen, and to the image, which the page
+    /// checks and the patch bar names.
+    pub root_manager_way: ManagerWay,
+    pub root_image_way: ImageWay,
+    /// What the images the phone starts from hold: each partition, and the
+    /// manager in it, once read.
+    pub root_images: Option<Vec<(String, Option<skyward_root::apk::Kind>)>>,
+    /// Where the patcher comes from: the manager the phone has, an APK the
+    /// user picks, or one downloaded.
+    pub root_source: RootSource,
+    /// The module the page of one shows, by its place in the list.
+    pub module: Option<usize>,
+    /// The modules the manager has, as the pages list them; none until they
+    /// are read.
+    pub modules: Option<Vec<skyward_root::modules::Module>>,
     /// How Skyward went back into the recovery partitions the install
     /// wrote over, where it did.
     pub reflash: Option<Reflash>,
@@ -1778,6 +2012,29 @@ impl Default for State {
             check_signature: false,
             recovery_partitions: false,
             keep_recovery: true,
+        keep_root: true,
+        keep_partitions: Vec::new(),
+        root_manager: None,
+        root_said: None,
+        root_variant: 0,
+        root_tier: 0,
+        root_proxy: 1,
+        root_partition: None,
+        root_image: RootImage::Partition,
+        root_pick: None,
+            package_said: None,
+            package_mode: None,
+            package_file: None,
+            package_list: None,
+            pending_flash: None,
+        saved_try: None,
+        root_manager_way: ManagerWay::None,
+        // The image is always there to be taken: the one the partition holds.
+        root_image_way: ImageWay::Direct,
+        root_images: None,
+        root_source: RootSource::Installed,
+        modules: None,
+        module: None,
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
@@ -1980,6 +2237,15 @@ pub enum Effect {
     Cancel,
     /// Read the slot's partitions for the mount page, which has just opened.
     ReadMounts,
+    /// Patch the image the manager patches, and write it to the partition.
+    PatchRoot,
+    /// Download the manager and tier at this place in the list the page
+    /// shows, telling how it goes with [`App::download_progress`] and
+    /// [`App::download_ended`] as the system's own package does.
+    DownloadManager(usize),
+    /// Go through this proxy, as `host:port`, for every request: empty where
+    /// none is to be used.
+    SetProxy(String),
     /// Read what the boot control holds of the slots, telling it with
     /// [`App::set_boot_slots`].
     ReadSlots,
@@ -3306,6 +3572,208 @@ impl App {
 
     /// The runtime read the mount table again, or could not: keep it and
     /// show it if it changed.
+    /// The manager the phone has, as the root page names it.
+    pub fn set_root(&mut self, manager: Option<String>) {
+        self.state.root_manager = manager;
+    }
+
+    /// An image chosen on a page is written, or patched and written, as the
+    /// row that opened the page asked.
+    /// Takes the package at `path` apart as far as its manifest goes, so the
+    /// page lists what it holds at once.
+    fn package_chosen(&mut self, path: &str) {
+        self.package_manifest(path, false);
+    }
+
+    /// The same for the install page, which lists every partition.
+    fn package_parts_chosen(&mut self, path: &str) {
+        self.package_manifest(path, true);
+    }
+
+    fn package_manifest(&mut self, path: &str, all: bool) {
+        self.state.root_pick = None;
+        self.state.package_list = None;
+        self.state.package_file = None;
+        self.state.package_said = None;
+        let read = (|| -> anyhow::Result<(PackageFile, PackageList)> {
+            let mut file = std::fs::File::open(path)?;
+            let update = match skyward_install::package::identify(&mut file)? {
+                skyward_install::package::Package::Update(update) => update,
+                _ => anyhow::bail!("this package holds no update payload"),
+            };
+            let manifest = skyward_install::payload::read(&mut file, update.payload_offset, update.payload_size)?;
+            let block = manifest.block();
+            let mut listed = Vec::new();
+            let mut left = Vec::new();
+            // What a page takes out is what an install can write: the
+            // partitions the installer has a name for, and no others.
+            for partition in &manifest.partitions {
+                let wanted = match all {
+                    true => FLASHABLE.contains(&partition.name.as_str()),
+                    false => partition.name == "boot" || partition.name == "init_boot",
+                };
+                if !wanted {
+                    continue;
+                }
+                if !partition.carried() {
+                    let steps: Vec<String> = partition.operations.iter().map(|operation| operation.kind.name()).collect();
+                    left.push(format!("{}（{}）", partition.name, steps.join(" ")));
+                    continue;
+                }
+                listed.push((partition.name.clone(), partition.size));
+            }
+            anyhow::ensure!(
+                !listed.is_empty(),
+                "包里没有可提取的分区：{}",
+                match left.is_empty() {
+                    true => "未找到 boot / init_boot".to_string(),
+                    false => left.join("、"),
+                }
+            );
+            if !left.is_empty() {
+                self.state.package_said = Some(format!("未取出：{}", left.join("、")));
+            }
+            Ok(((path.to_string(), update.payload_offset, update.payload_size, block), listed))
+        })();
+        match read {
+            Ok((file, listed)) => {
+                self.state.package_file = Some(file);
+                self.state.package_list = Some(listed);
+                self.state.package_mode = Some(match all {
+                    true => PackageMode::Flash,
+                    false => PackageMode::Patch,
+                });
+                self.open(Screen::PackageImages);
+            }
+            Err(e) => {
+                self.state.package_said = Some(format!("{e:#}"));
+                self.state.package_mode = Some(match all {
+                    true => PackageMode::Flash,
+                    false => PackageMode::Patch,
+                });
+                self.open(Screen::PackageImages);
+            }
+        }
+    }
+
+    /// Starts taking the partition at `name` out of the package on show, to
+    /// internal storage, on a thread of its own.
+    fn package_take(&mut self, name: &str) {
+        let Some((path, offset, size, block)) = self.state.package_file.clone() else {
+            self.state.package_said = Some("no package on show".into());
+            return;
+        };
+        let name = name.to_string();
+        if let Ok(mut held) = TAKING.lock() {
+            *held = Some((name.clone(), 0, 1));
+        }
+        std::thread::spawn(move || {
+            let taken = (|| -> anyhow::Result<String> {
+                let mut file = std::fs::File::open(&path)?;
+                let manifest = skyward_install::payload::read(&mut file, offset, size)?;
+                let partition = manifest.partitions.iter().find(|one| one.name == name).ok_or_else(|| anyhow::anyhow!("{name} is not in this package"))?;
+                let dir = std::path::Path::new("/sdcard/image");
+                std::fs::create_dir_all(dir)?;
+                let out = format!("/sdcard/image/{name}.img");
+                skyward_install::payload::extract_while(&mut file, manifest.data_at, block, partition, std::path::Path::new(&out), &mut |done, all| {
+                    if let Ok(mut held) = TAKING.lock() {
+                        *held = Some((name.clone(), done, all));
+                    }
+                })?;
+                Ok(out)
+            })();
+            if let Ok(mut held) = TAKING.lock() {
+                *held = None;
+            }
+            if let Ok(mut held) = TAKEN.lock() {
+                *held = Some(taken.map_err(|e| format!("{e:#}")));
+            }
+        });
+    }
+
+
+    /// The image taken out of a package is ready, or it is not: the page
+    /// goes where its mode says.
+    /// Puts the install page on show, for an image taken out of a package
+    /// that the installer has just taken.
+    pub fn show_install(&mut self) {
+        self.open(Screen::Installing);
+    }
+
+    pub fn package_taken(&mut self, taken: Result<String, String>) {
+        match taken {
+            Ok(path) => match self.state.package_mode {
+                Some(PackageMode::Flash) => {
+                    self.state.package_said = Some(format!("已提取到 {path}，点上方一行进入刷入页"));
+                    self.state.pending_flash = Some(path);
+                }
+                _ => {
+                    self.root_image_chosen(ImageWay::Package, RootImage::File(path));
+                    self.open(Screen::Root);
+                }
+            },
+            Err(e) => {
+                self.state.package_said = Some(e);
+                self.open(Screen::PackageImages);
+            }
+        }
+    }
+
+    pub fn root_image_chosen(&mut self, way: ImageWay, image: RootImage) {
+        self.state.root_image_way = way;
+        self.state.root_image = image;
+        self.state.root_said = None;
+        self.back_to_root();
+    }
+
+    /// A manager chosen becomes the one the patch runs, and the page it was
+    /// chosen on gives way to the root page.
+    pub fn root_manager_chosen(&mut self, way: ManagerWay, source: RootSource) {
+        self.state.root_manager_way = way;
+        self.state.root_source = source;
+        self.state.root_said = None;
+        self.back_to_root();
+    }
+
+    /// Go back to the root page a choice was made for, and not open another
+    /// one over it: choosing a manager or an image leaves no page behind.
+    fn back_to_root(&mut self) {
+        if self.stack.len() > 1 && self.stack.iter().any(|(screen, _, _)| *screen == Screen::Root) {
+            self.leave(true);
+            while self.screen() != Screen::Root && self.stack.len() > 1 {
+                self.stack.pop();
+            }
+            self.state.confirm = 0.0;
+            self.settle_page();
+            self.refresh();
+        } else {
+            self.open(Screen::Root);
+        }
+    }
+
+    /// The package a page chose becomes the one the next page patches with.
+    pub fn root_package_chosen(&mut self, path: String) {
+        self.root_manager_chosen(ManagerWay::Download, RootSource::Apk(path));
+    }
+
+    /// What the last patch came to.
+    pub fn root_ended(&mut self, said: String) {
+        self.state.root_said = Some(said);
+        self.refresh();
+    }
+
+    /// The modules the manager has.
+    pub fn set_modules(&mut self, modules: Option<Vec<skyward_root::modules::Module>>) {
+        self.state.modules = modules;
+        self.refresh();
+    }
+
+    /// Read the modules the manager has, for the pages that list them.
+    pub fn read_modules(&mut self) {
+        let dir = std::path::Path::new(skyward_root::modules::MODULES);
+        self.state.modules = Some(skyward_root::modules::list(dir).unwrap_or_default());
+    }
+
     pub fn set_mounts(&mut self, mounts: Result<Vec<MountRow>, String>) {
         if self.state.mounts != mounts {
             self.state.mounts = mounts;
@@ -4001,7 +4469,15 @@ impl App {
     /// the place's top, or could not: it becomes the folder shown to choose
     /// a file to install in, with what it holds that may be installed.
     pub fn set_place(&mut self, place: Place, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
-        let files = files.map(|entries| entries.into_iter().filter(installable).collect());
+        // What the page is for says what it shows: a package, an image, or
+        // either of the two an install takes.
+        let wanted: &[&str] = match (self.screen(), self.state.root_pick) {
+            (_, Some(RootPick::Manager)) => &[".apk"],
+            (_, Some(RootPick::Image)) => &[".img"],
+            (_, Some(RootPick::Package | RootPick::Parts)) => &[".zip"],
+            _ => &[".zip", ".img"],
+        };
+        let files = files.map(|entries| entries.into_iter().filter(|e| shown(e, wanted)).collect());
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
@@ -4818,6 +5294,18 @@ impl App {
                     return vec![Effect::ReadPlace(place, up)];
                 }
             }
+            // Going back from the images of a package returns to where they
+            // were asked for, not through the folder that held it: the
+            // install page, or the image file page.
+            Screen::PackageImages => {
+                let back_to = match self.state.package_mode {
+                    Some(PackageMode::Flash) => Screen::Installing,
+                    _ => Screen::RootImages,
+                };
+                while self.stack.len() > 2 && self.stack[self.stack.len() - 2].0 != back_to {
+                    self.stack.pop();
+                }
+            }
             Screen::FileInfo => {
                 self.state.file = None;
                 self.state.asking_delete = false;
@@ -5067,7 +5555,9 @@ impl App {
             Screen::Systems => vec![Effect::ReadSystems],
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
-            Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],
+            Screen::Choose(place) if self.state.place_open(place) => {
+                vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())]
+            }
             Screen::Search => {
                 self.state.search.clear();
                 self.state.layer = Layer::Letters;
@@ -5163,6 +5653,177 @@ impl App {
                 self.refresh();
                 return vec![Effect::Wlan(on)];
             }
+            // A module is a directory: turning it off writes a file into it,
+            // and turning it back on takes that file away.
+            Action::OpenModule(at) => {
+                self.state.module = Some(at);
+                self.open(Screen::ModuleInfo);
+            }
+            Action::RemoveModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::uninstall(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::RestoreModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::restore(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::DownloadManager(at) => {
+                if !self.state.data.storage_open() {
+                    self.open(Screen::Decrypt);
+                    return self.arrive_at(Screen::Decrypt);
+                }
+                if !self.state.online() {
+                    self.open(Screen::Wlan);
+                    return self.arrive_at(Screen::Wlan);
+                }
+                if !self.state.downloading() {
+                    self.state.download = Some(DownloadJob { progress: None, rate: 0, outcome: None, stopping: false });
+                    self.refresh();
+                    return vec![Effect::DownloadManager(at)];
+                }
+            }
+            Action::OpenPatchImage => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Image);
+                // The folder opens at the top of internal storage, holding
+                // nothing yet: what it showed before belongs to another path.
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenDirect => {
+                self.open(Screen::RootDirect);
+                return Vec::new();
+            }
+            Action::RootPackage(at) => {
+                if let Some(path) = skyward_root::releases::downloaded().get(at) {
+                    let source = RootSource::Apk(path.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Storage, source);
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::OpenSystemPackage => {
+                // The page the install page picks from, with the packages
+                // alone listed: what a patch takes out of one comes back here.
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Package);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenPackageParts => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Parts);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::PickPackageImage(at) => {
+                // One image is taken out at a time: another tap while one is
+                // under way would start a second thread over the same file.
+                if crate::app::taking().is_some() {
+                    return Vec::new();
+                }
+                let listed = self.state.package_list.clone().unwrap_or_default();
+                let Some((name, _)) = listed.get(at).cloned() else { return Vec::new() };
+                self.state.package_said = None;
+                self.state.pending_flash = None;
+                self.package_take(&name);
+            }
+            Action::FlashTaken => {
+                if let Some(path) = self.state.pending_flash.take() {
+                    return vec![Effect::InstallPath(path)];
+                }
+            }
+            Action::OpenProxy => {
+                self.state.proxy_text = skyward_net::http::proxy().unwrap_or_default();
+                self.open(Screen::Proxy);
+                return Vec::new();
+            }
+            Action::OpenPackages => {
+                // The page the install page picks from, and its folder: one
+                // place for both, so it works as that one does.
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Manager);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                // The page asks for what the folder holds: the read alone,
+                // as opening the page otherwise does more than a place needs.
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::Toggle(Switch::RootManager(at)) => {
+                let found = skyward_root::installed::installed().unwrap_or_default();
+                if let Some(app) = found.get(at) {
+                    let source = RootSource::Apk(app.apk.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Installed, source);
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickVariant(at)) => {
+                self.state.root_variant = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickProxy(at)) => {
+                self.state.root_proxy = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickTier(at)) => {
+                self.state.root_tier = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::RootPartition(at)) => {
+                let partitions = root_partitions();
+                if let Some(name) = partitions.get(at).copied() {
+                    self.state.root_partition = Some(name);
+                    self.state.root_image = RootImage::Partition;
+                    self.state.root_image_way = ImageWay::Direct;
+                    self.state.root_said = None;
+                    // Back to the root page rather than over it, so choosing
+                    // a partition leaves no page behind.
+                    self.back_to_root();
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::RootSource(0)) => {
+                self.root_manager_chosen(ManagerWay::LastUsed, RootSource::Installed);
+                return Vec::new();
+            }
+            Action::Toggle(Switch::RootSource(_)) => self.refresh(),
+            Action::Toggle(Switch::Module(at)) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let (id, on) = (module.id.clone(), !module.enabled);
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::set_enabled(dir, &id, on);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::Keep(place)) => {
+                // The page lists what the phone has; the name is read from the
+                // same list rather than carried in the action.
+                let parts = skyward_root::partitions::here();
+                if let Some(name) = parts.get(place) {
+                    let kept = &mut self.state.keep_partitions;
+                    match kept.iter().position(|one| one == name) {
+                        Some(at) => {
+                            kept.remove(at);
+                        }
+                        None => kept.push(name.clone()),
+                    }
+                }
+                self.refresh();
+            }
             Action::Toggle(switch) => {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
@@ -5171,6 +5832,18 @@ impl App {
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
+                    Switch::KeepRoot => &mut self.state.keep_root,
+                    Switch::Keep(_)
+                    | Switch::Module(_)
+                    | Switch::RootPartition(_)
+                    | Switch::RootSource(_)
+                    | Switch::PickVariant(_)
+                    | Switch::PickTier(_)
+                    | Switch::PickProxy(_)
+                    | Switch::RootManager(_)
+                    => {
+                        unreachable!("kept by the page of their own")
+                    }
                     Switch::ShowPassword => &mut self.state.show_password,
                     Switch::Wlan => unreachable!("the WLAN switch is turned above"),
                 };
@@ -5480,17 +6153,41 @@ impl App {
             }
             Action::ChooseEntry(i) => {
                 let screen = self.screen();
-                let Screen::Choose(place) = screen else { unreachable!("only a place's folder is chosen in") };
+                let place = match screen {
+                    Screen::Choose(place) => place,
+                    _ => unreachable!("only a place's folder is chosen in"),
+                };
                 let folder = self.state.folder(screen);
                 let entry = folder.entry(i).clone();
                 let path = folder.inside(&entry.name);
+                // What a page of the root's own picks: the same folder, told
+                // apart by what the page that opened it is for.
+                if let Some(pick) = self.state.root_pick {
+                    if matches!(entry.kind, FileKind::File | FileKind::Link { folder: false, .. }) {
+                        let top = match place {
+                            Place::Storage => "/sdcard",
+                            Place::UsbDrive => USB_DRIVE,
+                        };
+                        let at = format!("{top}/{path}");
+                        self.state.root_pick = None;
+                        match pick {
+                            RootPick::Manager => self.root_manager_chosen(ManagerWay::Storage, RootSource::Apk(at)),
+                            RootPick::Image => self.root_image_chosen(ImageWay::File, RootImage::File(at)),
+                            RootPick::Package => self.package_chosen(&at),
+                            RootPick::Parts => self.package_parts_chosen(&at),
+                        }
+                        return Vec::new();
+                    }
+                }
                 match entry.kind {
                     FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => {
                         let scroll = self.top().1;
                         self.state.folder_mut(screen).leave(scroll);
                         return vec![Effect::ReadPlace(place, path)];
                     }
-                    FileKind::File | FileKind::Link { folder: false, .. } => return self.install_file(place, path, entry.size, now),
+                    FileKind::File | FileKind::Link { folder: false, .. } => {
+                        return self.install_file(place, path, entry.size, now);
+                    }
                     FileKind::Special => unreachable!("a place lists no special files"),
                 }
             }
