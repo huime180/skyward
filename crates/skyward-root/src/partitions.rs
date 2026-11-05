@@ -14,9 +14,9 @@ pub const BY_NAME: &str = "/dev/block/by-name";
 /// manager patches, and a system update writes over, come first.
 pub fn names(dir: &Path) -> Result<Vec<String>> {
     /// The partitions a page keeps.
-    const KEEP: [&str; 54] = [
+    const KEEP: [&str; 55] = [
         "abl", "aop", "aop_config", "bluetooth", "boot", "countrycode",
-        "cpucp", "cpucp_dtb", "dcp", "devcfg", "dsp", "dtbo",
+        "cpucp", "cpucp_dtb", "dcp", "devcfg", "dsp", "dtbo", "efisp",
         "featenabler", "fsg", "hyp", "hyp_ac_config", "idmanager", "imagefv",
         "init_boot", "keymaster", "modem", "modemfirmware", "modemst1", "modemst2",
         "multiimgoem", "multiimgqti", "pdp", "pdp_cdb", "persist", "pvmfw",
@@ -26,9 +26,13 @@ pub fn names(dir: &Path) -> Result<Vec<String>> {
         "vendor_boot", "vm-bootsys", "xbl", "xbl_ac_config", "xbl_config", "xbl_ramdump",
     ];
 
-    // The ones the page lists first: a root manager patches these, and a
-    // system update writes them over.
-    const ORDER: [&str; 14] = ["boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery", "persist", "modem", "modemst1", "modemst2", "fsg", "bluetooth"];
+    // The ones the page lists first: the bootloader a phone is brought back
+    // from, the vendor's own EFI slice, and then what a root manager patches
+    // and a system update writes over.
+    const ORDER: [&str; 16] = [
+        "abl", "efisp", "boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "vbmeta_system", "vbmeta_vendor", "recovery",
+        "persist", "modem", "modemst1", "modemst2", "fsg", "bluetooth",
+    ];
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
