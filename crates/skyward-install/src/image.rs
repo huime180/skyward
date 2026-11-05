@@ -267,7 +267,7 @@ const BLKROSET: libc::c_int = 0x125d;
 /// left it set: a slot that is not the one running has its recovery marked
 /// so, and writes to it fail until the flag goes.
 #[cfg(target_os = "android")]
-fn make_writable(f: &File) -> Result<()> {
+pub(crate) fn make_writable(f: &File) -> Result<()> {
     use std::os::fd::AsRawFd;
     let mut off: libc::c_int = 0;
     let at = &mut off as *mut libc::c_int as *mut libc::c_void;
