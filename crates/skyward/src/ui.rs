@@ -1130,6 +1130,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let readings = Readings::start(cfg)?;
     let mut read_at = Instant::now();
     let mut installer: Option<Installer> = None;
+    // The manager the download page asked for, while it is looked up and
+    // downloaded.
+    let mut manager_plan: Option<PlanSlot> = None;
+    let mut manager_open = false;
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
