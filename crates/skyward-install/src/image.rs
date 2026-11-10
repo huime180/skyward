@@ -265,16 +265,6 @@ pub fn flash<R: Read + Seek>(image: &mut R, len: u64, devices: &[PathBuf], progr
 
 pub(crate) use skyward_block::drop_cache;
 
-/// What a partition is called in what an install says about it: the link
-/// under /dev/block/by-name says which one it is, and the whole path does not
-/// fit in a line of the kernel log.
-fn name(path: &Path) -> std::borrow::Cow<'_, str> {
-    match path.file_name() {
-        Some(name) => name.to_string_lossy(),
-        None => path.display().to_string().into(),
-    }
-}
-
 /// `BLKROSET` from linux/fs.h, which sets a block device's read-only flag:
 /// clearing it is what makes a partition the bootloader left read-only
 /// writable again. The libc this builds against does not carry it.
@@ -301,6 +291,7 @@ pub(crate) fn make_writable(f: &File) -> Result<()> {
 
 /// Hosts run the tests on plain files, which have no such flag.
 #[cfg(not(target_os = "android"))]
+#[allow(dead_code)]
 fn make_writable(_: &File) -> Result<()> {
     Ok(())
 }
