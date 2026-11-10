@@ -1500,6 +1500,24 @@ pub enum Action {
     StopSkywardUpdate,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
+    /// Download the manager and tier at this place in the list the download
+    /// page shows.
+    DownloadManager(usize),
+    /// Open the partitions an image of the phone's own is written to.
+    OpenDirect,
+    /// Show the module at this place in the list.
+    OpenModule(usize),
+    /// Open the file manager on the packages of internal storage.
+    OpenPackages,
+    /// Open the file manager on an image to patch and write.
+    OpenPatchImage,
+    Remake,
+    /// Have the manager take the module at this place away when the phone
+    /// next starts.
+    RemoveModule(usize),
+    Repair,
+    /// Keep the module at this place after all, taking back a removal.
+    RestoreModule(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
