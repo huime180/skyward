@@ -149,6 +149,13 @@ const NORMAL_MAX: [(&str, &str); 3] = [
 /// display driver booted with gives that maximum in the device tree.
 /// A manager's address being looked up, as the release it comes from tells
 /// it.
+/// Where a manager's package is: the address the worker downloads, and the
+/// name it is kept under.
+struct ManagerPlan {
+    url: String,
+    name: String,
+}
+
 type PlanSlot = std::sync::Arc<std::sync::Mutex<Option<Result<ManagerPlan, String>>>>;
 
 /// Ask the release the manager and tier at `at` comes from where its package
