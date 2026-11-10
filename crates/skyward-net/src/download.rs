@@ -169,7 +169,7 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         }
     }
     let mut hash = hash_of::<D>(&mut file, have, stop, progress)?;
-    if have < total {
+    if total.is_none() || have < total.unwrap_or(0) {
         let mut asked = agent.get(url);
         if have > 0 {
             asked = asked.header("Range", format!("bytes={have}-"));
@@ -219,10 +219,8 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
     }
     // A manager's release says nothing of its package's digest: what is
     // downloaded of one is taken as it came.
-    let expected = match sum {
-        Sum::Md5(hex) | Sum::Sha256(hex) => hex.to_lowercase(),
-    };
-    if !expected.is_empty() && hex(&hash.finalize()) != expected {
+    // A package whose release says nothing of its digest is taken as it came.
+    if !sum.is_empty() && hex(&hash.finalize()) != sum.to_lowercase() {
         drop(file);
         fs::remove_file(&part).with_context(|| format!("delete {}", part.display()))?;
         bail!(Damaged);
