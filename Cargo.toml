@@ -20,10 +20,13 @@ members = [
     "crates/skyward-sys",
     "crates/skyward-lp",
     "crates/skyward-root",
+    "crates/skyward-bootimg",
+    "crates/skyward-systems",
+    "crates/skyward-system-init",
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
