@@ -927,6 +927,8 @@ pub enum Confirm {
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
+    /// Patch the image a root manager patches, and write it.
+    PatchRoot,
 }
 
 /// What the wipe page erases: everything a factory reset erases, or any of

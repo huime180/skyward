@@ -2723,7 +2723,7 @@ pub fn module_info(cx: &Ctx) -> Frame {
     out.extend(hits(&listed.rows, &[Action::Toggle(Switch::Module(at)), second]));
     // The page is named after the module it shows, rather than after the
     // list it was opened from.
-    Frame { title, ..Frame::new(t, c, out, l.pick(MODULES), top) }
+    Frame { title: title.to_string(), ..Frame::new(t, c, out, l.pick(MODULES), top) }
 }
 
 /// Giving the data partition's files the SELinux labels the installed
