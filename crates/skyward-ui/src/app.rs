@@ -778,7 +778,6 @@ impl Folder {
         let names: Vec<_> = path.components().filter(|c| matches!(c, std::path::Component::Normal(_))).collect();
         if depth >= names.len() {
             return None;
-            proxy_text: String::new(),
         }
         let mut up = if path.has_root() { std::path::PathBuf::from("/") } else { std::path::PathBuf::new() };
         up.extend(&names[..depth]);
@@ -2065,6 +2064,7 @@ impl Default for State {
         root_partition: None,
         root_image: RootImage::Partition,
         root_pick: None,
+            proxy_text: String::new(),
             package_said: None,
             package_mode: None,
             package_file: None,
