@@ -778,6 +778,7 @@ impl Folder {
         let names: Vec<_> = path.components().filter(|c| matches!(c, std::path::Component::Normal(_))).collect();
         if depth >= names.len() {
             return None;
+            proxy_text: String::new(),
         }
         let mut up = if path.has_root() { std::path::PathBuf::from("/") } else { std::path::PathBuf::new() };
         up.extend(&names[..depth]);
@@ -2024,6 +2025,8 @@ pub struct State {
     pub skyward_job: Option<SkywardJob>,
     /// How fast data went over the network joined in the last second.
     pub traffic: Traffic,
+    /// The proxy written by hand on its page, `host:port`.
+    pub proxy_text: String,
 }
 
 impl Default for State {
@@ -4517,7 +4520,7 @@ impl App {
             (_, Some(RootPick::Package | RootPick::Parts)) => &[".zip"],
             _ => &[".zip", ".img"],
         };
-        let files = files.map(|entries| entries.into_iter().filter(|e| shows(e, wanted)).collect());
+        let files = files.map(|entries| entries.into_iter().filter(|e| file_shown(e, wanted)).collect());
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
@@ -7767,6 +7770,19 @@ impl App {
         widgets::pattern_lock(&mut fr.canvas, t, cx, cy, span, &self.state.pattern);
         self.layer = None;
         self.dirty = true;
+    }
+}
+
+fn file_shown(e: &FileRow, wanted: &[&str]) -> bool {
+    if e.name.starts_with('.') {
+        return false;
+    }
+    match e.kind {
+        FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => true,
+        FileKind::File | FileKind::Link { folder: false, .. } => {
+            wanted.iter().any(|ext| e.name.to_ascii_lowercase().ends_with(ext))
+        }
+        FileKind::Special => false,
     }
 }
 
