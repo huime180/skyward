@@ -4869,3 +4869,18 @@ mod tests {
 const ROOT: Text = ["root 管理", "root 管理", "Root"];
 
 const MODULES: Text = ["模块管理", "模組管理", "Modules"];
+
+/// The proxy every request goes through, typed as `host:port`.
+pub fn proxy_entry(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let title = l.pick(["代理", "代理", "Proxy"]);
+    let y = widgets::section_first(&mut c, t, f, top, title);
+    let (y, caret) = widgets::text_field(&mut c, t, f, y, &s.proxy_text);
+    let note = [Row::new(l.pick(["留空则不使用代理", "留空則不使用代理", "Leave it empty to use none"])).trail(Trail::None)];
+    let listed = widgets::list(&mut c, t, f, y + t.m.card_gap, &note);
+    keyboard_hits(&mut c, t, f, s, l.pick(["保存", "儲存", "Save"]), &mut out);
+    Frame { caret: Some(caret), ..Frame::new(t, fit(c, t, listed.bottom), out, title, top) }
+}
