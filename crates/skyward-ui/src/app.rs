@@ -157,6 +157,9 @@ pub enum Screen {
     /// A network added by hand: its name, how it is protected and its
     /// password, typed on the screen's keyboard.
     WlanAdd,
+    /// The proxy every request goes through, typed where a network's own
+    /// details stand.
+    Proxy,
 }
 
 /// How far asking the update server for the newest system has come.
@@ -587,6 +590,25 @@ pub enum Switch {
     Wlan,
     /// Show the password typed rather than a dot for each character.
     ShowPassword,
+    /// Keep the partition at this place in the list the page shows as it is
+    /// when an install writes over the slot.
+    Keep(usize),
+    /// Patch the slot an install writes into with the phone's root manager,
+    /// so root is there after the restart.
+    KeepRoot,
+    /// Turn the module at this place in the list on or off.
+    Module(usize),
+    /// Choose the way to GitHub a download goes by.
+    PickProxy(usize),
+    PickTier(usize),
+    /// Choose the manager or the tier the download page offers, by its place.
+    PickVariant(usize),
+    /// Patch with the manager at this place in the list the page shows.
+    RootManager(usize),
+    /// Write the image the partition at this place in the list holds.
+    RootPartition(usize),
+    /// Which of the three sources the patch takes its patcher from.
+    RootSource(usize),
 }
 
 /// What a backup can take, in the order the backup page lists it.
