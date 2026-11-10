@@ -4860,3 +4860,7 @@ mod tests {
         assert_eq!(capitalized(Lang::Hans, "清空 data 分区"), "清空 data 分区");
     }
 }
+
+const ROOT: Text = ["root 管理", "root 管理", "Root"];
+
+const MODULES: Text = ["模块管理", "模組管理", "Modules"];

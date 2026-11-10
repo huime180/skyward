@@ -3118,3 +3118,7 @@ mod tests {
         assert!(lines[broken + 1].starts_with("dalvik-cache"), "and goes on with what follows the slash: {lines:?}");
     }
 }
+
+pub fn list_height(c: &Canvas, t: &Theme, f: &Fonts, rows: &[Row]) -> f32 {
+    rows.iter().map(|r| layout(c, t, f, r).h).sum()
+}

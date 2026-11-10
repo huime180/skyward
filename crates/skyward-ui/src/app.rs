@@ -4477,7 +4477,7 @@ impl App {
             (_, Some(RootPick::Package | RootPick::Parts)) => &[".zip"],
             _ => &[".zip", ".img"],
         };
-        let files = files.map(|entries| entries.into_iter().filter(|e| shown(e, wanted)).collect());
+        let files = files.map(|entries| entries.into_iter().filter(|e| shows(e, wanted)).collect());
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
