@@ -739,9 +739,6 @@ impl DeviceConfig {
                 }
             }
         }
-        for axis in &cfg.touch.reversed {
-            ensure!(axis == "x" || axis == "y", "[touch] reversed: {axis} is not one of the screen's axes");
-        }
         Ok(cfg)
     }
 }
