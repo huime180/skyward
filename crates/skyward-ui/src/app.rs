@@ -5787,6 +5787,14 @@ impl App {
                     return vec![Effect::InstallPath(path)];
                 }
             }
+            Action::Remake => {
+                self.state.root_said = None;
+                self.refresh();
+            }
+            Action::Repair => {
+                self.state.root_said = None;
+                self.refresh();
+            }
             Action::OpenProxy => {
                 self.state.proxy_text = skyward_net::http::proxy().unwrap_or_default();
                 self.open(Screen::Proxy);

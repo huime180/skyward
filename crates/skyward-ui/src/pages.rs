@@ -62,6 +62,7 @@ pub struct Band {
 
 pub fn render(screen: Screen, cx: &Ctx) -> Frame {
     match screen {
+        Screen::Proxy => proxy_entry(cx),
         Screen::Root => root(cx),
         Screen::Modules => modules(cx),
         Screen::ModuleInfo => module_info(cx),
@@ -2722,7 +2723,7 @@ pub fn module_info(cx: &Ctx) -> Frame {
     out.extend(hits(&listed.rows, &[Action::Toggle(Switch::Module(at)), second]));
     // The page is named after the module it shows, rather than after the
     // list it was opened from.
-    Frame { title: title.into(), ..Frame::new(t, c, out, l.pick(MODULES), top) }
+    Frame { title, ..Frame::new(t, c, out, l.pick(MODULES), top) }
 }
 
 /// Giving the data partition's files the SELinux labels the installed
