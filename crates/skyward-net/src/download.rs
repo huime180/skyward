@@ -18,6 +18,9 @@ const CHUNK: usize = 1 << 20;
 pub enum Sum {
     Md5(String),
     Sha256(String),
+    /// Nothing says what the file should be: a manager's package, which
+    /// GitHub hands over without one.
+    None,
 }
 
 /// Where a package is downloaded to until it is whole and checked.
@@ -132,6 +135,9 @@ pub fn fetch(agent: &ureq::Agent, url: &str, path: &Path, sum: &Sum, stop: &Atom
     match sum {
         Sum::Md5(hex) => fetch_as::<Md5>(agent, url, path, hex, stop, progress),
         Sum::Sha256(hex) => fetch_as::<Sha256>(agent, url, path, hex, stop, progress),
+        // The digest is worked out as the bytes come in either way, so a
+        // package with nothing to check against is written as it arrives.
+        Sum::None => fetch_as::<Sha256>(agent, url, path, "", stop, progress),
     }
 }
 
@@ -194,7 +200,8 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         }
         file.sync_all().with_context(|| format!("write {} through", part.display()))?;
     }
-    if hex(&hash.finalize()) != sum.to_lowercase() {
+    // Nothing was said to check it against, so the bytes are taken as they came.
+    if !sum.is_empty() && hex(&hash.finalize()) != sum.to_lowercase() {
         drop(file);
         fs::remove_file(&part).with_context(|| format!("delete {}", part.display()))?;
         bail!(Damaged);
