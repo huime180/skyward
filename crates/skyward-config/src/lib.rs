@@ -1024,7 +1024,7 @@ mod tests {
         let logd = cfg.logd.expect("the K100 Pro Max's recovery leaves out what its logd loads");
         assert_eq!(logd.libraries, ["/mnt/system/system/lib64/libsysutils.so", "/mnt/system/system/lib64/libcap.so"]);
         let haptics = cfg.haptics.expect("the K100 Pro Max has a motor");
-        assert_eq!((haptics.click, haptics.resonance.as_deref()), (None, Some("/sys/class/qcom-haptics/lra_frequency_hz")), "its click is made");
+        assert_eq!((haptics.click, Some(haptics.resonance.as_str())), (None, Some("/sys/class/qcom-haptics/lra_frequency_hz")), "its click is made");
         assert_eq!(haptics.strength, Strength { lightest: 0.25, strongest: 0.75 });
         assert_eq!(cfg.backup.efs, ["modemst1", "modemst2", "fsg", "fsc", "persist"]);
         assert!(cfg.backup.data_skipped.contains(&"vendor/secure_element".to_string()));
