@@ -1148,7 +1148,7 @@ mod tests {
             [Write { path: "/sys/class/touch/touch_dev/enable_touch_raw".into(), value: "0".into() }],
             "its controller reports positions itself"
         );
-        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), remoteproc: Vec::new() }));
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), remoteproc: None }));
         assert_eq!(cfg.partitions.mounted, ["persist"], "the secure world keeps its own files there");
         let paths: Vec<&str> = cfg.services.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(
@@ -1233,7 +1233,7 @@ mod tests {
             "its driver hands the frames it reads to the service that reads them"
         );
         assert!(cfg.touch.flip_y, "its panel counts the screen's vertical axis from the bottom");
-        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), remoteproc: Vec::new() }));
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), remoteproc: None }));
         assert_eq!(cfg.partitions.mounted, ["persist"], "the secure world keeps its own files there");
         assert!(cfg.logd.is_none(), "its stock recovery carries the libraries its logd loads");
         assert!(cfg.haptics.is_none(), "a tablet has no motor to click");
