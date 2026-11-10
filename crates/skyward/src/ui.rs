@@ -147,6 +147,176 @@ const NORMAL_MAX: [(&str, &str); 3] = [
 /// Above it the panel runs in high brightness mode, which the stock system
 /// keeps for strong sunlight and its slider does not reach. The panel the
 /// display driver booted with gives that maximum in the device tree.
+/// A manager's address being looked up, as the release it comes from tells
+/// it.
+type PlanSlot = std::sync::Arc<std::sync::Mutex<Option<Result<ManagerPlan, String>>>>;
+
+/// Ask the release the manager and tier at `at` comes from where its package
+/// is, and nothing of the package itself: the worker the update page
+/// downloads with fetches that.
+fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPlan> {
+    use skyward_root::releases::{self, Tier, Variant};
+    let all = Variant::all();
+    let (variant, tier) = *all.get(at).context("the list holds no such manager")?;
+    let agent = skyward_net::http::agent(servers.clone());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let work = Path::new("/tmp/root");
+    std::fs::create_dir_all(work).with_context(|| format!("create {}", work.display()))?;
+    let fetch = |url: &str, path: &Path| -> Result<()> {
+        skyward_net::download::fetch(&agent, url, path, "", &stop, &mut |_| {})
+    };
+    // The way to GitHub the page chose, and no other: what a phone reaches
+    // through one it does not reach through another.
+    // A build a workflow made takes only the way that carries any address:
+    // the other mirrors reach GitHub's own files alone.
+    let proxy = match tier {
+        Tier::Dev => proxy.min(1),
+        Tier::Stable => proxy,
+    };
+    let mirror = releases::MIRRORS.get(proxy).map(|(_, url)| *url).unwrap_or("");
+    match (tier, releases::has_releases(variant)) {
+        // The newest release carries the package of the stable tier, where
+        // the manager publishes one.
+        (Tier::Stable, true) => {
+            let listing = work.join("latest.json");
+            fetch(&releases::through(mirror, &releases::latest(variant)), &listing)?;
+            let json = std::fs::read_to_string(&listing).with_context(|| format!("read {}", listing.display()))?;
+            let one = format!("[{json}]");
+            let url = releases::apk_in(&one, Tier::Stable).context("the newest release carries no package")?;
+            Ok(ManagerPlan { name: releases::file_name(&url), url: releases::through(mirror, &url) })
+        }
+        // What the workflow built, which is the only way to a manager that
+        // publishes no release: a zip, the package taken out of it once it
+        // is down.
+        // What a workflow built comes from nightly.link, which hands the
+        // download on where the mirror carries it: a build taken as it is
+        // fails where the same build through the way the page chose came.
+        _ => Ok(ManagerPlan { name: "manager.zip".to_string(), url: releases::through(mirror, &releases::nightly(variant)) }),
+    }
+}
+
+/// Start looking up where the manager and tier at `at` of the ones the page
+/// lists is.
+fn start_manager_plan(servers: Servers, at: usize, proxy: usize) -> PlanSlot {
+    let plan = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let held = plan.clone();
+    std::thread::Builder::new()
+        .name("manager-plan".into())
+        .spawn(move || {
+            let said = manager_plan(&servers, at, proxy).map_err(|e| format!("{e:#}"));
+            if let Ok(mut slot) = held.lock() {
+                *slot = Some(said);
+            }
+        })
+        .expect("the plan thread starts");
+    plan
+}
+
+/// The manager's package in `into`: the zip a workflow built unpacked first.
+fn manager_apk(into: &Path) -> Result<PathBuf> {
+    // What came down as a zip is unpacked, whatever the workflow named it.
+    let mut zips: Vec<PathBuf> = std::fs::read_dir(into)
+        .with_context(|| format!("read {}", into.display()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.to_string_lossy().to_ascii_lowercase().ends_with(".zip"))
+        .collect();
+    zips.sort();
+    if let Some(zip) = zips.pop() {
+        let at = unzip_apk(&zip, into)?;
+        std::fs::remove_file(&zip).ok();
+        return Ok(at);
+    }
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in std::fs::read_dir(into).with_context(|| format!("read {}", into.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "apk") {
+            continue;
+        }
+        let at = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+        if newest.as_ref().is_none_or(|(when, _)| at > *when) {
+            newest = Some((at, path));
+        }
+    }
+    newest.map(|(_, path)| path).context("the download left no package")
+}
+
+/// Write a boot image to its partition: one the page chose goes in as it is
+/// when the page says so, and is patched with a manager otherwise. Gives what
+/// the page says of it.
+fn patch_root(
+    partition: Option<&'static str>,
+    source: &skyward_ui::app::RootSource,
+    image: &skyward_ui::app::RootImage,
+) -> Result<String> {
+    // What a patch comes to is worth a line of the kernel log: the page that
+    // asked for it is gone once the phone starts, and the next one has to
+    // know why it failed.
+    let done = patch_root_in(partition, source, image);
+    match &done {
+        Ok(said) => {
+            let _ = skyward_sys::kmsg(&format!("root: {said}"));
+        }
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("root: patching failed: {e:#}"));
+        }
+    }
+    done
+}
+
+fn patch_root_in(
+    partition: Option<&'static str>,
+    source: &skyward_ui::app::RootSource,
+    image: &skyward_ui::app::RootImage,
+) -> Result<String> {
+    let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    let work = Path::new("/tmp/root");
+    std::fs::create_dir_all(work).with_context(|| format!("create {}", work.display()))?;
+    let by_name = Path::new(skyward_root::BY_NAME);
+    let partition = partition.unwrap_or_else(|| skyward_root::target(by_name, slot));
+    // What the partition holds now is kept aside before anything is written
+    // to it, whichever way the image to write is come by.
+    let stock = work.join("stock.img");
+    skyward_root::read(by_name, partition, slot, &stock)?;
+    let kept = keep_aside(&stock, partition, slot, work)?;
+    let _ = skyward_sys::kmsg(&format!("root: the image {partition}{} held is at {}", slot.suffix(), kept.display()));
+    // The image patched is the one the partition holds, or a file the page
+    // chose; either way the manager makes it the image root starts from.
+    let base = match image {
+        skyward_ui::app::RootImage::Partition => &stock,
+        skyward_ui::app::RootImage::File(at) => std::path::Path::new(at),
+    };
+    let manager = manager_from(source, work)?;
+    let patched = work.join("patched.img");
+    let _ = skyward_sys::kmsg(&format!(
+        "root: {} patches {partition}{} from {}",
+        manager.name(),
+        slot.suffix(),
+        base.display()
+    ));
+    let options = skyward_root::Options::default();
+    match &manager {
+        skyward_root::Manager::Magisk(magisk) => magisk.patch(base, &patched, &options)?,
+        skyward_root::Manager::KernelSu(ksu) => ksu.patch(base, &patched)?,
+        skyward_root::Manager::Apatch(apatch) => apatch.patch(base, &patched, &options)?,
+    }
+    skyward_root::write(&patched, by_name, partition, slot)?;
+    // Read the partition again: what is on it has to be what was written, or
+    // the phone does not start.
+    let back = work.join("written.img");
+    skyward_root::read(by_name, partition, slot, &back)?;
+    let want = std::fs::metadata(&patched).with_context(|| format!("measure {}", patched.display()))?.len();
+    let got = std::fs::metadata(&back).with_context(|| format!("measure {}", back.display()))?.len();
+    ensure!(want == got, "{partition}{} reads back as {got} bytes, not the {want} written", slot.suffix());
+    // The detail is the partition and where the image it held went; the page
+    // says what it means in the user's words.
+    Ok(format!("{partition}{} — {}", slot.suffix(), kept.display()))
+}
+
+/// Wi-Fi settings hold one too, and this is what a page that sets one writes.
+const HAND_PROXY: &str = "/sdcard/skyward.proxy";
+
 fn normal_max(max: u32) -> Result<u32> {
     let param = "/sys/module/msm_drm/parameters/dsi_display0";
     let boot = fs::read_to_string(param).with_context(|| format!("read {param}"))?;

@@ -793,3 +793,11 @@ pub fn system_proxy() -> Option<String> {
     }
     None
 }
+
+/// The text a setting named `name` holds, in the settings' own writing.
+fn value_between(text: &str, name: &str) -> Option<String> {
+    let (_, after) = text.split_once(name)?;
+    let (_, after) = after.split_once('>')?;
+    let value = after.split('<').next()?;
+    Some(value.replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&"))
+}
