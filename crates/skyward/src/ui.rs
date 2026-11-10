@@ -2224,6 +2224,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                 }
                             }
                             continue;
+                        }
                         let release = app.state.newest().context("a download is of the newest system")?.clone();
                         let end = match end {
                             updates::End::Downloaded => DownloadEnd::Downloaded,
