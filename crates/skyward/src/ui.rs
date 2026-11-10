@@ -2289,6 +2289,35 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
                         installer.as_ref().context("no installer holds an image")?.flash(partition, pick.slots(slot));
                     }
+                    Effect::PatchRoot => {
+                        let l = app.state.lang;
+                        let (good, bad) = (
+                            l.pick(["修补成功", "修補成功", "Patched"]),
+                            l.pick(["修补失败", "修補失敗", "Patching failed"]),
+                        );
+                        let said = match patch_root(app.state.root_partition, &app.state.root_source, &app.state.root_image) {
+                            Ok(detail) => format!("{good}：{detail}"),
+                            Err(why) => format!("{bad}：{why}"),
+                        };
+                        app.root_ended(said);
+                    }
+                    Effect::DownloadManager(at) => {
+                        ensure!(manager_plan.is_none() && !manager_open, "a package is being downloaded already");
+                        manager_plan = Some(start_manager_plan(servers.clone(), at, app.state.root_proxy));
+                    }
+                    Effect::SetProxy(text) => {
+                        // What the page sets is kept where the next start
+                        // finds it: an empty line takes the hand-written one
+                        // away and leaves the phone's own settings to say.
+                        let at = std::path::Path::new(HAND_PROXY);
+                        if text.is_empty() {
+                            std::fs::remove_file(at).ok();
+                            skyward_net::http::use_proxy(wlan::system_proxy());
+                        } else {
+                            std::fs::write(at, format!("{text}\n")).ok();
+                            skyward_net::http::use_proxy(Some(text));
+                        }
+                    }
                     Effect::Cancel => match &installer {
                         Some(i) => i.cancel()?,
                         // The update the system asked for, waiting on the
