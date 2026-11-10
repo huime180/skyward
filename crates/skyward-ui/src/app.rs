@@ -7198,6 +7198,7 @@ impl App {
                     false => fx.push(Effect::Wipe(chosen)),
                 }
             }
+            Confirm::PatchRoot => fx.push(Effect::PatchRoot),
             Confirm::Install | Confirm::InstallWipe => {
                 if let Install::Confirming { version, .. } = &self.state.install {
                     self.state.install = Install::Updating { version: version.clone(), stage: None, overwriting: false };

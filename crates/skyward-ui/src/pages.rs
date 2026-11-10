@@ -144,6 +144,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Install => (INSTALL, false),
         Confirm::InstallWipe => (["滑动以安装并清除", "滑動以安裝並清除", "Slide to install and wipe"], true),
         Confirm::RunScript => (INSTALL, true),
+        Confirm::PatchRoot => (["修补并安装", "修補並安装", "Slide to patch and install"], true),
         Confirm::Merge => (["滑动以合并", "滑動以合併", "Slide to merge"], true),
         Confirm::Relabel => (["滑动以修复", "滑動以修復", "Slide to fix"], true),
         Confirm::SwitchSystem => (["滑动以切换并重启", "滑動以切換並重新啟動", "Slide to switch and reboot"], false),
@@ -2723,7 +2724,7 @@ pub fn module_info(cx: &Ctx) -> Frame {
     out.extend(hits(&listed.rows, &[Action::Toggle(Switch::Module(at)), second]));
     // The page is named after the module it shows, rather than after the
     // list it was opened from.
-    Frame { title: title.to_string(), ..Frame::new(t, c, out, l.pick(MODULES), top) }
+    Frame::new(t, c, out, l.pick(MODULES), top)
 }
 
 /// Giving the data partition's files the SELinux labels the installed
