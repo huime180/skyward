@@ -219,7 +219,10 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
     }
     // A manager's release says nothing of its package's digest: what is
     // downloaded of one is taken as it came.
-    if !sum.is_empty() && hex(&hash.finalize()) != sum.to_lowercase() {
+    let expected = match sum {
+        Sum::Md5(hex) | Sum::Sha256(hex) => hex.to_lowercase(),
+    };
+    if !expected.is_empty() && hex(&hash.finalize()) != expected {
         drop(file);
         fs::remove_file(&part).with_context(|| format!("delete {}", part.display()))?;
         bail!(Damaged);
