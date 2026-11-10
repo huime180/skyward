@@ -82,17 +82,10 @@ struct Panel {
     /// The kernel dropped events that were not read in time; what arrives
     /// up to the next report is incomplete.
     dropped: bool,
-    /// Whether the panel reports its two ranges the other way round from the
-    /// screen it lies under, as one mounted across that screen does: what it
-    /// calls its first axis then runs along the screen's second.
-    swapped: bool,
-    /// Whether the numbers the panel reports run the other way from the
-    /// screen's, for each of the screen's own axes.
-    reversed: (bool, bool),
 }
 
 impl Panel {
-    fn new(path: PathBuf, dev: RawDevice, w: f32, h: f32, reversed: (bool, bool)) -> Result<Self> {
+    fn new(path: PathBuf, dev: RawDevice) -> Result<Self> {
         let mut x_range = None;
         let mut y_range = None;
         let mut slots = 1;
@@ -115,28 +108,8 @@ impl Panel {
             return Err(io::Error::last_os_error()).context("stamp touch events with the monotonic clock");
         }
         set_nonblocking(dev.as_raw_fd()).context("make touch non-blocking")?;
-        // A panel mounted across the screen reports what it calls its first
-        // axis along the screen's second, so its two ranges follow the
-        // screen's the other way round. The ranges say which way it lies.
-        let span = |(low, high): (i32, i32)| (high - low).max(1) as f32;
-        let across = (span(x_range) / w - span(y_range) / h).abs();
-        let along = (span(x_range) / h - span(y_range) / w).abs();
-        let swapped = along < across;
-        let mut panel = Panel {
-            dev,
-            path,
-            x_range,
-            y_range,
-            slots,
-            slot: 0,
-            down: false,
-            was_down: false,
-            raw: (0, 0),
-            moved: false,
-            dropped: false,
-            swapped,
-            reversed,
-        };
+        let mut panel =
+            Panel { dev, path, x_range, y_range, slots, slot: 0, down: false, was_down: false, raw: (0, 0), moved: false, dropped: false };
         // The kernel drops a position equal to the one a slot already holds,
         // so a touch landing where the last one lifted carries no position;
         // start from what the panel holds now.
@@ -236,9 +209,6 @@ impl Inputs {
         if unsafe { libc::inotify_add_watch(fd, dir.as_ptr(), libc::IN_CREATE | libc::IN_ATTRIB) } < 0 {
             return Err(io::Error::last_os_error()).context("watch /dev/input");
         }
-        // Which of the screen's own axes the panel reports the other way
-        // round, as the device's configuration says.
-        let reversed = (reversed.iter().any(|a| a == "x"), reversed.iter().any(|a| a == "y"));
         let wakeful = Wakeful::new()?;
         wakeful.add(fd)?;
         let mut inputs = Inputs {
@@ -282,6 +252,7 @@ impl Inputs {
                 self.panel = Some(Panel::new(path, dev)?);
                 for w in &self.touch.writes {
                     fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+                    skyward_sys::kmsg(&format!("wrote {} to {} for the touchscreen", w.value, w.path))?;
                 }
             } else if keys {
                 set_nonblocking(dev.as_raw_fd()).context("make buttons non-blocking")?;
