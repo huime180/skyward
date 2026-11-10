@@ -1791,6 +1791,32 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         fds.push(readings.fd());
         wait(&fds, timeout)?;
         let now = monotonic_ms();
+        // A download under way tells its own progress, and its end turns the
+        // page into the one that patches with what it brought.
+        if let Some(slot) = &manager_plan {
+            let said = slot.lock().ok().and_then(|mut held| held.take());
+            if let Some(said) = said {
+                manager_plan = None;
+                match said {
+                    Ok(plan) => {
+                        // The address says which way to GitHub it takes, and
+                        // what is fetched through it.
+                        skyward_sys::kmsg(&format!("root: fetching {}", plan.url))?;
+                        // The package comes down through the page's own
+                        // worker, so it goes as the update page's does.
+                        let into = Path::new(skyward_root::releases::MANAGERS);
+                        let at = into.join(&plan.name);
+                        let task = updates::Task::download(&plan.url, &plan.name, at);
+                        downloader = Some(updates::Worker::start(task, servers.clone())?);
+                        manager_open = true;
+                    }
+                    Err(why) => {
+                        skyward_sys::kmsg(&format!("root: download failed: {why}"))?;
+                        app.download_ended(DownloadEnd::Failed(Failure::Other(why)), Have::Nothing, now);
+                    }
+                }
+            }
+        }
         for slept in sleeper.slept() {
             match slept {
                 Slept::Woke => skyward_sys::kmsg("the phone slept and woke")?,
@@ -2184,6 +2210,20 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 match ev {
                     updates::Event::Progress(progress, rate) => app.download_progress(progress, rate),
                     updates::Event::Ended(end) => {
+                        if manager_open {
+                            manager_open = false;
+                            fetched = true;
+                            skyward_sys::kmsg(&format!("the manager's download ended: {end:?}"))?;
+                            let came = matches!(end, DownloadEnd::Downloaded);
+                            app.download_ended(end, Have::Nothing, now);
+                            if came {
+                                let into = Path::new(skyward_root::releases::MANAGERS);
+                                match manager_apk(into) {
+                                    Ok(at) => app.root_package_chosen(at.display().to_string()),
+                                    Err(e) => app.report(&format!("{e:#}"), now),
+                                }
+                            }
+                            continue;
                         let release = app.state.newest().context("a download is of the newest system")?.clone();
                         let end = match end {
                             updates::End::Downloaded => DownloadEnd::Downloaded,
