@@ -2687,7 +2687,6 @@ pub fn module_info(cx: &Ctx) -> Frame {
     let Some(module) = s.modules.as_ref().and_then(|list| list.get(at)) else {
         return Frame::new(t, c, out, title, top);
     };
-    let title = module.name.clone();
     let state = if module.removed {
         l.pick(["下次开机时卸载", "下次開機時卸載", "Removed when the phone next starts"])
     } else if module.enabled {

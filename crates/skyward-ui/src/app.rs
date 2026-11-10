@@ -800,20 +800,6 @@ impl Folder {
     }
 }
 
-/// Whether a list in a place shows an entry: a folder, or a file the
-/// installer takes. Hidden entries are left out, as the stock file manager
-/// leaves them out.
-fn installable(e: &FileRow) -> bool {
-    if e.name.starts_with('.') {
-        return false;
-    }
-    match e.kind {
-        FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => true,
-        FileKind::File | FileKind::Link { folder: false, .. } => installs(e),
-        FileKind::Special => false,
-    }
-}
-
 /// Whether the installer takes a file by its name: an update package, a
 /// zip that installs itself, or a partition image.
 pub(crate) fn installs(e: &FileRow) -> bool {
