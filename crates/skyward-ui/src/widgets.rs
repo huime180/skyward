@@ -2755,6 +2755,10 @@ fn theme_tile(c: &mut Canvas, t: &Theme, x: f32, y: f32, w: f32, h: f32, dark: b
     }
 }
 
+pub fn list_height(c: &Canvas, t: &Theme, f: &Fonts, rows: &[Row]) -> f32 {
+    rows.iter().map(|r| layout(c, t, f, r).h).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3117,8 +3121,4 @@ mod tests {
         assert!(lines[broken].starts_with("/data/misc/"), "the path starts its own line: {lines:?}");
         assert!(lines[broken + 1].starts_with("dalvik-cache"), "and goes on with what follows the slash: {lines:?}");
     }
-}
-
-pub fn list_height(c: &Canvas, t: &Theme, f: &Fonts, rows: &[Row]) -> f32 {
-    rows.iter().map(|r| layout(c, t, f, r).h).sum()
 }
