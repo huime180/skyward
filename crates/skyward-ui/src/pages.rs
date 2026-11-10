@@ -62,6 +62,10 @@ pub struct Band {
 
 pub fn render(screen: Screen, cx: &Ctx) -> Frame {
     match screen {
+        Screen::Root => root(cx),
+        Screen::Modules => modules(cx),
+        Screen::ModuleInfo => module_info(cx),
+        Screen::Keep => keep(cx),
         Screen::Decrypt => decrypt(cx),
         Screen::Home => home(cx),
         Screen::Settings => settings(cx),
