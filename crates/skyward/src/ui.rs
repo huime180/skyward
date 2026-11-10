@@ -1310,7 +1310,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // The manager the download page asked for, while it is looked up and
     // downloaded.
     let mut manager_plan: Option<PlanSlot> = None;
-    let manager_open = false;
+    let mut manager_download: Option<std::thread::JoinHandle<std::result::Result<(), String>>> = None;
+    let mut manager_open = false;
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
@@ -1793,6 +1794,29 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         let now = monotonic_ms();
         // A download under way tells its own progress, and its end turns the
         // page into the one that patches with what it brought.
+        // A manager's package, once the thread that fetched it has ended.
+        if manager_download.as_ref().is_some_and(|handle| handle.is_finished()) {
+            let ended = manager_download.take().expect("the thread is there").join();
+            manager_open = false;
+            let said = match ended {
+                Ok(Ok(())) => None,
+                Ok(Err(why)) => Some(why),
+                Err(_) => Some("the download thread stopped".to_string()),
+            };
+            match said {
+                None => {
+                    let into = Path::new(skyward_root::releases::MANAGERS);
+                    match manager_apk(into) {
+                        Ok(at) => app.root_package_chosen(at.display().to_string()),
+                        Err(e) => app.report(&format!("{e:#}"), now),
+                    }
+                }
+                Some(why) => {
+                    skyward_sys::kmsg(&format!("root: download failed: {why}"))?;
+                    app.download_ended(DownloadEnd::Failed(Failure::Other(why)), Have::Nothing, now);
+                }
+            }
+        }
         if let Some(slot) = &manager_plan {
             let said = slot.lock().ok().and_then(|mut held| held.take());
             if let Some(said) = said {
@@ -1802,12 +1826,22 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         // The address says which way to GitHub it takes, and
                         // what is fetched through it.
                         skyward_sys::kmsg(&format!("root: fetching {}", plan.url))?;
-                        // The package comes down through the page's own
-                        // worker, so it goes as the update page's does.
                         let into = Path::new(skyward_root::releases::MANAGERS);
                         let at = into.join(&plan.name);
-                        let task = updates::Task::download(&plan.url, &plan.name, at);
-                        downloader = Some(updates::Worker::start(task, servers.clone())?);
+                        let url = plan.url.clone();
+                        let servers = servers.clone();
+                        manager_download = Some(
+                            std::thread::Builder::new()
+                                .name("manager-download".into())
+                                .spawn(move || {
+                                    let agent = skyward_net::http::agent(servers);
+                                    let stop = std::sync::atomic::AtomicBool::new(false);
+                                    let sum = skyward_net::download::Sum::None;
+                                    skyward_net::download::fetch(&agent, &url, &at, &sum, &stop, &mut |_| {})
+                                        .map_err(|e| format!("{e:#}"))
+                                })
+                                .expect("the download thread starts"),
+                        );
                         manager_open = true;
                     }
                     Err(why) => {
@@ -2210,21 +2244,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 match ev {
                     updates::Event::Progress(progress, rate) => app.download_progress(progress, rate),
                     updates::Event::Ended(end) => {
-                        if manager_open {
-                            manager_open = false;
-                            fetched = true;
-                            skyward_sys::kmsg(&format!("the manager's download ended: {end:?}"))?;
-                            let came = matches!(end, DownloadEnd::Downloaded);
-                            app.download_ended(end, Have::Nothing, now);
-                            if came {
-                                let into = Path::new(skyward_root::releases::MANAGERS);
-                                match manager_apk(into) {
-                                    Ok(at) => app.root_package_chosen(at.display().to_string()),
-                                    Err(e) => app.report(&format!("{e:#}"), now),
-                                }
-                            }
-                            continue;
-                        }
                         let release = app.state.newest().context("a download is of the newest system")?.clone();
                         let end = match end {
                             updates::End::Downloaded => DownloadEnd::Downloaded,
