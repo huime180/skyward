@@ -2,6 +2,7 @@
 //! header and ramdisk, which partitions it can go to, and writing it to
 //! them the way fastboot does.
 
+use std::fs::File;
 use abootimg_oxide::binrw::io::Cursor;
 use abootimg_oxide::binrw::BinRead;
 use abootimg_oxide::{Header, VendorHeader};
