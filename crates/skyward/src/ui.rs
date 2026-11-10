@@ -1310,7 +1310,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // The manager the download page asked for, while it is looked up and
     // downloaded.
     let mut manager_plan: Option<PlanSlot> = None;
-    let mut manager_open = false;
+    let manager_open = false;
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
@@ -2892,4 +2892,64 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             app.file_transfer_failed(false, &skyward_ui::fmt::transfer_stopped(app.state.lang, &format!("{why:#}")), now);
         }
     }
+}
+
+/// The package inside the zip `zip`, written into `into`.
+fn unzip_apk(zip: &Path, into: &Path) -> Result<std::path::PathBuf> {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(zip).with_context(|| format!("open {}", zip.display()))?)
+        .with_context(|| format!("read {}", zip.display()))?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).with_context(|| format!("read entry {index}"))?;
+        let Some(name) = entry.enclosed_name() else { continue };
+        let Some(name) = name.file_name().map(|name| name.to_string_lossy().into_owned()) else { continue };
+        if !name.to_ascii_lowercase().ends_with(".apk") {
+            continue;
+        }
+        let at = into.join(&name);
+        let mut out = std::fs::File::create(&at).with_context(|| format!("create {}", at.display()))?;
+        std::io::copy(&mut entry, &mut out).with_context(|| format!("write {}", at.display()))?;
+        return Ok(at);
+    }
+    anyhow::bail!("{} holds no package", zip.display())
+}
+
+/// The image `stock` put where a patch that does not boot is undone with it:
+/// the shared folder, or the work folder where the card is not there.
+fn keep_aside(stock: &Path, partition: &str, slot: skyward_vab::Slot, work: &Path) -> Result<std::path::PathBuf> {
+    let at = Path::new("/sdcard/Download").join(format!("stock-{partition}{}.img", slot.suffix()));
+    if std::fs::copy(stock, &at).is_ok() {
+        return Ok(at);
+    }
+    let at = work.join(format!("stock-{partition}{}.img", slot.suffix()));
+    std::fs::copy(stock, &at).with_context(|| format!("keep {}", stock.display()))?;
+    Ok(at)
+}
+
+/// The manager whose tools patch the image, from the phone or from a package
+/// the page chose, which then has to carry its own.
+fn manager_from(source: &skyward_ui::app::RootSource, work: &Path) -> Result<skyward_root::Manager> {
+    let manager = match source {
+        skyward_ui::app::RootSource::Installed => skyward_root::detect().context("no root manager on the phone")?,
+        // A package carries its manager's own patcher: which one it is
+        // decides how it is run.
+        skyward_ui::app::RootSource::Apk(at) => {
+            let apk = std::path::Path::new(at);
+            let into = work.join("apk");
+            match skyward_root::apk::kind(apk)? {
+                skyward_root::apk::Kind::Magisk => {
+                    skyward_root::apk::unpack(apk, &into, skyward_root::apk::Kind::Magisk)?;
+                    skyward_root::Manager::Magisk(skyward_root::Magisk { dir: into, version: None })
+                }
+                skyward_root::apk::Kind::KernelSu => {
+                    skyward_root::apk::unpack(apk, &into, skyward_root::apk::Kind::KernelSu)?;
+                    skyward_root::Manager::KernelSu(skyward_root::KernelSu { ksud: into.join("ksud"), version: None })
+                }
+                skyward_root::apk::Kind::Apatch => {
+                    skyward_root::apk::unpack(apk, &into, skyward_root::apk::Kind::Apatch)?;
+                    skyward_root::Manager::Apatch(skyward_root::Apatch { dir: into, version: None })
+                }
+            }
+        }
+    };
+    Ok(manager)
 }
