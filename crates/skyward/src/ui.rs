@@ -170,7 +170,7 @@ fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPla
     let work = Path::new("/tmp/root");
     std::fs::create_dir_all(work).with_context(|| format!("create {}", work.display()))?;
     let fetch = |url: &str, path: &Path| -> Result<()> {
-        skyward_net::download::fetch(&agent, url, path, "", &stop, &mut |_| {})
+        skyward_net::download::fetch(&agent, url, path, &skyward_net::download::Sum::Sha256("".into()), &stop, &mut |_| {})
     };
     // The way to GitHub the page chose, and no other: what a phone reaches
     // through one it does not reach through another.
