@@ -34,7 +34,7 @@ load = ["nt36532_touch", "mitee_dlkm"]
 # vertical axis follows from the bottom, which they do not.
 [touch]
 writes = [{ path = "/sys/class/touch/touch_dev/enable_touch_raw", value = "1" }]
-reversed = ["y"]
+flip_y = true
 
 # The firmware of the WLAN chip and of the tablet's other processors, and the
 # apps the secure world runs, are on the modem partition, which the tablet
