@@ -76,7 +76,7 @@ pub fn nightly(variant: Variant) -> String {
     let (workflow, package) = match variant {
         Variant::Official => ("build-manager.yml", "manager.zip"),
         Variant::SukiSu => ("build-manager.yml", "Manager.zip"),
-        Variant::BakaSu => ("build-manager", "Manager-release.zip"),
+        Variant::BakaSu => ("build-manager.yml", "Manager-release.zip"),
     };
     format!("https://nightly.link/{}/workflows/{workflow}/main/{package}", variant.repo())
 }

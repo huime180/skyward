@@ -1772,6 +1772,12 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 other => unreachable!("time passing asks for nothing but the motor, not {other:?}"),
             }
         }
+        // The managers installed on the phone are read as their pages open,
+        // and kept: reading them on every frame is what made the root pages
+        // slow to come up.
+        if matches!(app.screen(), Screen::Root | Screen::RootManagers) && app.state.root_apps.is_none() {
+            app.root_apps(skyward_root::installed::installed().unwrap_or_default());
+        }
         let time = clock(app.state.time_zone)?;
         if time != shown_clock {
             shown_clock = time;

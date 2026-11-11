@@ -1873,6 +1873,9 @@ pub struct State {
     pub root_tier: usize,
     /// Which way to GitHub a download goes by.
     pub root_proxy: usize,
+    /// The managers installed on the phone, read once when a page that names
+    /// them opens, not on every frame that draws it.
+    pub root_apps: Option<Vec<skyward_root::installed::App>>,
     /// Whether an install patches the slot it writes into with the phone's
     /// root manager.
     pub keep_root: bool,
@@ -1901,6 +1904,8 @@ pub struct State {
     pub pending_flash: Option<String>,
     /// Why a package could not be taken apart, for the install page.
     pub package_said: Option<String>,
+    /// The version the package on show installs, as its build names it.
+    pub package_version: Option<String>,
     /// The network being joined with the key the phone keeps for it, which a
     /// refusal of asks a password for instead.
     pub saved_try: Option<skyward_net::wlan::Network>,
@@ -2090,10 +2095,12 @@ impl Default for State {
         root_variant: 0,
         root_tier: 0,
         root_proxy: 1,
+        root_apps: None,
         root_partition: None,
         root_image: RootImage::Partition,
         root_pick: None,
             package_said: None,
+        package_version: None,
             package_mode: None,
             package_file: None,
             package_list: None,
@@ -3730,6 +3737,13 @@ impl App {
     /// The data partition is open: every user's own files with it, or
     /// those of `waiting`, the user and the control their screen lock is
     /// answered with, still closed.
+    /// Keep the managers installed on the phone, read once for the pages
+    /// that name them.
+    pub fn root_apps(&mut self, apps: Vec<skyward_root::installed::App>) {
+        self.state.root_apps = Some(apps);
+        self.refresh();
+    }
+
     pub fn data_waiting(&mut self, waiting: Option<(u32, Keys)>) {
         self.state.data = match waiting {
             Some((user, keys)) => Data::Locked { user, keys, checking: false },
@@ -3780,12 +3794,23 @@ impl App {
         self.state.package_list = None;
         self.state.package_file = None;
         self.state.package_said = None;
-        let read = (|| -> anyhow::Result<(PackageFile, PackageList)> {
+        self.state.package_version = None;
+        let read = (|| -> anyhow::Result<(PackageFile, PackageList, Option<String>)> {
             let mut file = std::fs::File::open(path)?;
             let update = match skyward_install::package::identify(&mut file)? {
                 skyward_install::package::Package::Update(update) => update,
                 _ => anyhow::bail!("this package holds no update payload"),
             };
+            // The version the package installs, from the build it names, as
+            // the OTA metadata writes it: brand/device/device:version/build/OS…:type.
+            // The version the package installs is the one its file is named
+            // after, as the update server names it: the build it asks to be
+            // is `17OS4.0.261026…`, which says nothing of what a user reads.
+            let version = std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(version_in_name)
+                .or_else(|| update.version().map(str::to_string));
             let manifest = skyward_install::payload::read(&mut file, update.payload_offset, update.payload_size)?;
             let block = manifest.block();
             let mut listed = Vec::new();
@@ -3818,12 +3843,13 @@ impl App {
             if !left.is_empty() {
                 self.state.package_said = Some(format!("未取出：{}", left.join("、")));
             }
-            Ok(((path.to_string(), update.payload_offset, update.payload_size, block), listed))
+            Ok(((path.to_string(), update.payload_offset, update.payload_size, block), listed, version))
         })();
         match read {
-            Ok((file, listed)) => {
+            Ok((file, listed, version)) => {
                 self.state.package_file = Some(file);
                 self.state.package_list = Some(listed);
+                self.state.package_version = version;
                 self.state.package_mode = Some(match all {
                     true => PackageMode::Flash,
                     false => PackageMode::Patch,
@@ -5438,6 +5464,9 @@ impl App {
     }
 
     fn open(&mut self, screen: Screen) {
+        if matches!(screen, Screen::Root | Screen::RootManagers) {
+            self.state.root_apps = None;
+        }
         self.leave(false);
         self.push(screen);
     }
@@ -5991,8 +6020,9 @@ impl App {
                 }
                 let listed = self.state.package_list.clone().unwrap_or_default();
                 let Some((name, _)) = listed.get(at).cloned() else { return Vec::new() };
-                self.state.package_said = None;
-                self.state.pending_flash = None;
+                // What the page said before, and the image it handed over,
+                // stay on show while one is taken out: the page drawn again
+                // with the row held down is laid out as it was.
                 self.package_take(&name);
             }
             Action::FlashTaken => {
@@ -12946,3 +12976,15 @@ mod tests {
         assert!(!app.display_on());
     }
 }
+
+/// The version a package's file is named after, as in
+/// `piano-ota_full-OS4.0.6.0.XPYCNXM-user-17.0-96dbee09b8.zip`: `OS` and what
+/// follows it up to the next thing that is not part of a version.
+fn version_in_name(name: &str) -> Option<String> {
+    let at = name.find("OS")?;
+    let tail = &name[at..];
+    let taken: String = tail.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+    let trimmed = taken.trim_end_matches('.').to_string();
+    (trimmed.len() > 2).then_some(trimmed)
+}
+

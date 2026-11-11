@@ -91,12 +91,13 @@ impl Kind {
         }
     }
 
-    /// The library whose name says the package is this one.
-    fn marker(self) -> &'static str {
+    /// The libraries whose name says the package is this one. A fork that
+    /// makes its names up is known by what its libraries do instead.
+    fn markers(self) -> &'static [&'static str] {
         match self {
-            Kind::Magisk => "libmagiskboot.so",
-            Kind::KernelSu => "libksud.so",
-            Kind::Apatch => "libapd.so",
+            Kind::Magisk => &["libmagiskboot.so"],
+            Kind::KernelSu => &["libksud.so"],
+            Kind::Apatch => &["libapd.so"],
         }
     }
 }
@@ -106,11 +107,33 @@ pub fn kind(apk: &Path) -> Result<Kind> {
     let mut zip = ZipArchive::new(File::open(apk).with_context(|| format!("open {}", apk.display()))?)
         .with_context(|| format!("read {}", apk.display()))?;
     for kind in [Kind::Magisk, Kind::KernelSu, Kind::Apatch] {
-        if entry(&mut zip, kind.marker()).is_some() {
+        if kind.markers().iter().any(|marker| entry(&mut zip, marker).is_some()) {
             return Ok(kind);
         }
     }
+    // A fork may make its libraries' names up: what they hold still says
+    // which patcher they are.
+    if patcher_entry(&mut zip, "boot-patch").is_some() {
+        return Ok(Kind::KernelSu);
+    }
     bail!("{} is not a root manager's package: it carries no patcher", apk.display())
+}
+
+/// The library of an arm64 package whose bytes hold `word`: a fork that
+/// makes its libaries' names up is still known by what they do.
+fn patcher_entry(zip: &mut ZipArchive<File>, word: &str) -> Option<String> {
+    let names: Vec<String> = zip
+        .file_names()
+        .filter(|name| name.starts_with("lib/arm64") && name.ends_with(".so"))
+        .map(str::to_string)
+        .collect();
+    for name in names {
+        let mut bytes = Vec::new();
+        if zip.by_name(&name).ok().and_then(|mut entry| entry.read_to_end(&mut bytes).ok()).is_some() && bytes.windows(word.len()).any(|window| window == word.as_bytes()) {
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// The files `kind`'s patcher runs, unpacked into `into`, which is made: the
@@ -124,7 +147,7 @@ pub fn unpack(apk: &Path, into: &Path, kind: Kind) -> Result<()> {
         Kind::KernelSu => {
             // `ksud` patches the boot image itself: nothing else comes with it.
             let mut zip = ZipArchive::new(File::open(apk).with_context(|| format!("open {}", apk.display()))?)?;
-            let Some(entry) = entry(&mut zip, "libksud.so") else {
+            let Some(entry) = entry(&mut zip, "libksud.so").or_else(|| patcher_entry(&mut zip, "boot-patch")) else {
                 bail!("{} carries no ksud", apk.display());
             };
             let mut bytes = Vec::new();

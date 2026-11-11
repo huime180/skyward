@@ -2640,20 +2640,40 @@ pub fn package_images(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = t.m.content_top;
     let title = l.pick(["包内镜像", "包內映像檔", "Images in the package"]);
-    // The room the card that says how far an image has come takes, kept
-    // whether or not one is being taken out: a page drawn again with a row
-    // held down is laid out as it was.
-    let room = t.m.dp(89.7) + t.m.card_gap;
-    let mut c = long_page(cx);
-    let mut y = top + room;
-    if let Some((name, done, all)) = crate::app::taking() {
-        let share = match all {
-            0 => 0.0,
-            _ => done as f32 / all as f32,
-        };
-        let detail = format!("{} / {}", fmt::bytes(done), fmt::bytes(all));
-        let _ = widgets::progress_card(&mut c, t, f, top, &format!("正在提取 {name}"), &detail, Some(share));
+    let listed = s.package_list.clone().unwrap_or_default();
+    let sizes: Vec<String> = listed.iter().map(|(_, size)| fmt::bytes(*size)).collect();
+    let rows: Vec<Row> = listed
+        .iter()
+        .enumerate()
+        .map(|(at, (name, _))| Row::new(name.as_str()).subtitle(sizes[at].as_str()).trail(Trail::Arrow))
+        .collect();
+    // What this phone runs, and what the package would put on it: said here,
+    // where the page keeps the room, before anything is taken out.
+    let here = cx.info.os_version.clone().unwrap_or_else(|| l.pick(["未知", "未知", "unknown"]).to_string());
+    let there = s.package_version.clone().unwrap_or_else(|| l.pick(["未知", "未知", "unknown"]).to_string());
+    // The room the card takes, kept whether or not an image is being taken
+    // out: a page drawn again with a row held down is laid out as it was.
+    let progress_h = t.m.dp(89.7);
+    let room = progress_h + t.m.card_gap;
+    let mut c = rows_page(cx, &rows, room + t.m.card_gap * 2.0 + t.m.margin * 4.0);
+    match crate::app::taking() {
+        Some((name, done, all)) => {
+            let share = match all {
+                0 => 0.0,
+                _ => done as f32 / all as f32,
+            };
+            let detail = format!("{} / {}", fmt::bytes(done), fmt::bytes(all));
+            let _ = widgets::progress_card(&mut c, t, f, top, &format!("正在提取 {name}"), &detail, Some(share));
+        }
+        // Nothing is being taken out: the room says which system is on the
+        // phone and which the package would put there.
+        None => {
+            let here = format!("{} {}", l.pick(["本机", "本機", "This phone"]), here);
+            let there = format!("{} {}", l.pick(["包内", "包內", "In the package"]), there);
+            let _ = version_card(&mut c, t, f, top, &here, &there);
+        }
     }
+    let mut y = top + room;
     if let Some(path) = s.pending_flash.clone() {
         let row = Row::new(l.pick(["已提取，进入刷入页", "已提取，進入刷入頁", "Taken out: flash it"]))
             .subtitle(path.as_str())
@@ -2662,7 +2682,6 @@ pub fn package_images(cx: &Ctx) -> Frame {
         out.extend(hits(&block.rows, &[Action::FlashTaken]));
         y = block.bottom;
     }
-    let listed = s.package_list.clone().unwrap_or_default();
     if listed.is_empty() {
         let said = s
             .package_said
@@ -2676,12 +2695,6 @@ pub fn package_images(cx: &Ctx) -> Frame {
     if let Some(said) = s.package_said.clone() {
         y = widgets::paragraph(&mut c, t, f, y, &said);
     }
-    let sizes: Vec<String> = listed.iter().map(|(_, size)| fmt::bytes(*size)).collect();
-    let rows: Vec<Row> = listed
-        .iter()
-        .enumerate()
-        .map(|(at, (name, _))| Row::new(name.as_str()).subtitle(sizes[at].as_str()).trail(Trail::Arrow))
-        .collect();
     let block = widgets::list(&mut c, t, f, y, &rows);
     let picks: Vec<Action> = (0..rows.len()).map(Action::PickPackageImage).collect();
     out.extend(hits(&block.rows, &picks));
@@ -2700,6 +2713,24 @@ pub fn package_images(cx: &Ctx) -> Frame {
     };
     let y = widgets::footnote(&mut c, t, f, y, note);
     Frame::new(t, fit(c, t, y), out, title, top)
+}
+
+/// What this phone runs and what the package would put there, drawn in the
+/// room the progress card takes: the card that says how far an extraction
+/// has come covers it.
+fn version_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, here: &str, there: &str) -> f32 {
+    let m = &t.m;
+    let (card_x, right) = (m.margin, m.w as f32 - m.margin);
+    let x = card_x + m.inner;
+    let width = right - m.inner - x;
+    let (ink_top, _) = f.heading.ink(m.row_title_px);
+    let title_base = top + m.dp(23.5) - ink_top;
+    let detail_base = title_base + m.dp(20.2);
+    let bottom = detail_base + m.dp(24.0);
+    c.fill_round_rect(card_x, top, right - card_x, bottom - top, m.card_radius, t.pal.card);
+    c.text(&f.heading, here, x, title_base, m.row_title_px, t.pal.text, Some(width));
+    c.text(&f.body, there, x, detail_base, m.sub_px, t.pal.subtitle, Some(width));
+    bottom
 }
 
 /// The modules the phone's root manager has: what each is, and whether it
@@ -3732,7 +3763,7 @@ pub fn root_installed(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = t.m.content_top;
     let title = l.pick(["从已安装管理器中选择", "從已安裝管理器中選擇", "Choose an installed manager"]);
-    let found = skyward_root::installed::installed().unwrap_or_default();
+    let found: Vec<skyward_root::installed::App> = cx.state.root_apps.clone().unwrap_or_default();
     if found.is_empty() {
         let why = match skyward_root::installed::unreadable() {
             Some(why) => format!("{} {why}", l.pick(["读不到已安装的应用：", "讀不到已安裝的應用：", "The installed apps cannot be read:"])),
@@ -3782,7 +3813,7 @@ pub fn root_confirm(cx: &Ctx) -> Frame {
         crate::app::RootSource::Apk(at) => {
             // A manager the phone has is named by its package, not by the
             // path of the `base.apk` it was installed from.
-            let known = skyward_root::installed::installed().unwrap_or_default();
+            let known = cx.state.root_apps.as_deref().unwrap_or(&[]);
             let shown = known.iter().find(|app| app.apk == Path::new(at)).map(|app| app.label()).unwrap_or_else(|| file_name(at));
             format!("{}（{}）", s.root_manager_way.name(l), shown)
         }
