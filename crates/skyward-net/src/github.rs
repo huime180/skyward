@@ -103,50 +103,76 @@ fn ways(url: &str) -> Vec<String> {
     WAYS.iter().map(|way| format!("{way}{url}")).collect()
 }
 
-pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
-    // A phone that reaches GitHub by one way may not reach it by another:
-    // the answer is asked for by each in turn.
-    let mut said = None;
-    for url in ways(LATEST) {
-        let attempt = (|| -> Result<Newest> {
-            let mut response = agent
-                .get(&url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", API_VERSION)
-                .header("User-Agent", format!("Skyward/{running}"))
-                .call()
-                .with_context(|| format!("ask {url}"))?;
-            let status = response.status();
-            let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {url}"))?;
-            if !status.is_success() {
-                bail!(refusal(status, &body));
-            }
-            newest(&body, codename, running)
-        })();
-        match attempt {
-            Ok(newest) => return Ok(newest),
-            Err(e) => said = Some(e),
+/// Why one way to GitHub did not carry an address: it answered, and that
+/// answer is the one to report, or it was not reached at all, and another
+/// way may reach it.
+enum Attempt {
+    Answered(String),
+    Unreached(anyhow::Error),
+}
+
+impl Attempt {
+    /// The answer GitHub sent, or the last way that did not reach it.
+    fn said(self) -> anyhow::Error {
+        match self {
+            Attempt::Answered(said) => anyhow!(said),
+            Attempt::Unreached(e) => e,
         }
     }
-    Err(said.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
+}
+
+pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
+    // A phone that reaches GitHub by one way may not reach it by another:
+    // the answer is asked for by each in turn until one is reached, and an
+    // answer sent, even a refusal, is taken as it is.
+    let mut last = None;
+    for url in ways(LATEST) {
+        match ask_by(agent, &url, codename, running) {
+            Ok(newest) => return Ok(newest),
+            Err(Attempt::Answered(said)) => bail!(said),
+            Err(Attempt::Unreached(e)) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
+}
+
+/// [`ask`] of `url`.
+fn ask_by(agent: &ureq::Agent, url: &str, codename: &str, running: &str) -> Result<Newest, Attempt> {
+    let mut response = agent
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header("User-Agent", format!("Skyward/{running}"))
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(..) => Attempt::Answered(format!("ask {url}: {e}")),
+            e => Attempt::Unreached(anyhow!(e).context(format!("ask {url}"))),
+        })?;
+    let status = response.status();
+    let body = response.body_mut().read_to_string().map_err(|e| Attempt::Unreached(anyhow!(e).context(format!("read the answer of {url}"))))?;
+    if !status.is_success() {
+        return Err(Attempt::Answered(refusal(status, &body)));
+    }
+    newest(&body, codename, running).map_err(|e| Attempt::Answered(format!("{e:#}")))
 }
 
 /// Where the file a build's `url` hands out is now, as GitHub's API sends
 /// the build of version `running` that asks for it on: a short-lived
 /// address of the file itself, away from github.com.
 pub fn locate(agent: &ureq::Agent, url: &str, running: &str) -> Result<String> {
-    let mut said = None;
+    let mut last = None;
     for way in ways(url) {
         match locate_by(agent, &way, running) {
             Ok(found) => return Ok(found),
-            Err(e) => said = Some(e),
+            Err(Attempt::Answered(said)) => bail!(said),
+            Err(Attempt::Unreached(e)) => last = Some(e),
         }
     }
-    Err(said.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
+    Err(last.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
 }
 
 /// [`locate`] by one address.
-fn locate_by(agent: &ureq::Agent, url: &str, running: &str) -> Result<String> {
+fn locate_by(agent: &ureq::Agent, url: &str, running: &str) -> Result<String, Attempt> {
     let mut response = agent
         .get(url)
         .header("Accept", "application/octet-stream")
@@ -156,16 +182,24 @@ fn locate_by(agent: &ureq::Agent, url: &str, running: &str) -> Result<String> {
         .max_redirects(0)
         .build()
         .call()
-        .with_context(|| format!("ask {url}"))?;
+        .map_err(|e| match e {
+            ureq::Error::Status(..) => Attempt::Answered(format!("ask {url}: {e}")),
+            e => Attempt::Unreached(anyhow!(e).context(format!("ask {url}"))),
+        })?;
     let status = response.status();
     if status.is_redirection() {
-        let location = response.headers().get(ureq::http::header::LOCATION).with_context(|| format!("GitHub answered {status}, and names no address"))?;
-        return Ok(location.to_str().context("GitHub names an address that is not text")?.to_string());
+        let location = response
+            .headers()
+            .get(ureq::http::header::LOCATION)
+            .map(|l| l.to_str().unwrap_or_default().to_string())
+            .ok_or_else(|| Attempt::Answered(format!("GitHub answered {status}, and names no address")))?;
+        return Ok(location);
     }
-    ensure!(!status.is_success(), "GitHub sends the file itself in its answer, at no address of its own");
-    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {url}"))?;
-    bail!(refusal(status, &body))
+    let mut said = String::new();
+    let _ = response.body_mut().read_to_string().map(|s| said = s);
+    Err(Attempt::Answered(refusal(status, &said)))
 }
+
 
 /// Why GitHub turned a question down, as it says, as when too many questions
 /// came from the address that asked.
