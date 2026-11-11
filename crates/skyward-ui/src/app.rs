@@ -12,9 +12,9 @@ use crate::glow::{self, GlowClock};
 use crate::lang::{Lang, Text};
 use crate::motion::{self, Spring};
 use crate::pages::{self, Band, Ctx};
-use crate::sprite::{Blurs, Sprite};
 use crate::search;
 use crate::settings::Settings;
+use crate::sprite::{Blurs, Sprite};
 use crate::term::{self, Term, TermKey};
 use crate::theme::Theme;
 use crate::tr;
@@ -28,6 +28,7 @@ use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan};
 use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
+use std::borrow::Cow;
 
 /// The pages of the recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,28 @@ pub enum Screen {
     /// Mounting and unmounting the slot's partitions.
     Mount,
     Install,
+    /// The partitions an install keeps as they are, a switch each.
+    Keep,
+    /// Patching the boot image the phone's root manager patches.
+    Root,
+    /// Downloading a root manager's package from its releases.
+    RootDownload,
+    /// What a patch with the package chosen would do, and the swipe that
+    /// does it.
+    RootConfirm,
+    /// The managers the data partition holds, which a patch can run.
+    RootInstalled,
+    /// The partitions an image of the phone's own is written to.
+    RootDirect,
+    /// The ways to a manager, and to an image.
+    RootManagers,
+    RootImages,
+    /// The images taken out of a system package, to pick one of.
+    PackageImages,
+    /// The modules the phone's root manager has.
+    Modules,
+    /// One module: what it says of itself, and what can be done with it.
+    ModuleInfo,
     /// A place's folders and the files in them that can be installed, to
     /// choose one.
     Choose(Place),
@@ -130,6 +153,9 @@ pub enum Screen {
     Wlan,
     /// The password of the network chosen, typed on the screen's keyboard.
     WlanPassword,
+    /// The proxy every request goes through, typed where a network's own
+    /// details stand.
+    Proxy,
     /// The network joined, and the address and the rest it gave.
     WlanNetwork,
     /// A network added by hand: its name, how it is protected and its
@@ -209,7 +235,8 @@ pub enum SkywardStage {
     Download(Progress),
     /// The build is written into the recovery partitions and read back:
     /// bytes so far, of all.
-    Write { done: u64, total: u64 },
+    Write { done: u64, total: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,12 +355,18 @@ pub enum UsbDrive {
 }
 
 /// Where the package being installed comes from.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+impl Default for Source {
+    fn default() -> Source {
+        Source::File(Place::Storage)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     /// The computer, with `adb sideload`.
-    #[default]
     Computer,
-    /// A file chosen in a place.
+    /// A file chosen in a place: the page opens on internal storage, where
+    /// most installs come from.
     File(Place),
     /// A file opened in the file manager; `drive` for one on the USB drive.
     Opened { drive: bool },
@@ -544,6 +577,7 @@ pub enum Slider {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
     Vibrate,
+    AutoRotate,
     /// Offer internal storage to a computer over USB.
     FileTransfer,
     /// Compress a backup.
@@ -556,6 +590,25 @@ pub enum Switch {
     /// Write Skyward back into the recovery partitions an install writes
     /// over.
     KeepRecovery,
+    /// Patch the slot an install writes into with the phone's root manager,
+    /// so root is there after the restart.
+    KeepRoot,
+    /// Keep the partition at this place in the list the page shows as it is
+    /// when an install writes over the slot.
+    Keep(usize),
+    /// Turn the module at this place in the list on or off.
+    Module(usize),
+    /// Write the image the partition at this place in the list holds.
+    RootPartition(usize),
+    /// Choose the manager or the tier the download page offers, by its place.
+    PickVariant(usize),
+    PickTier(usize),
+    /// Choose the way to GitHub a download goes by.
+    PickProxy(usize),
+    /// Patch with the manager at this place in the list the page shows.
+    RootManager(usize),
+    /// Which of the three sources the patch takes its patcher from.
+    RootSource(usize),
     Wlan,
     /// Show the password typed rather than a dot for each character.
     ShowPassword,
@@ -633,7 +686,8 @@ pub enum BackupEnd {
     Saved(String),
     /// A backup restored, but for what it held in the folders of users gone
     /// since, which only the system makes: where those were.
-    Restored { unmade: Vec<String> },
+    Restored { unmade: Vec<String>,
+    },
     /// Stopped as asked: a backup stopped leaves nothing of itself, and a
     /// restore stops only while nothing is written.
     Stopped,
@@ -679,10 +733,12 @@ pub struct FileRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileKind {
     /// A folder, and how many entries it holds when it can be read.
-    Folder { items: Option<usize> },
+    Folder { items: Option<usize>,
+    },
     File,
     /// A symbolic link: where it points, and whether that is a folder.
-    Link { target: String, folder: bool },
+    Link { target: String, folder: bool,
+    },
     /// A device, socket or pipe.
     Special,
 }
@@ -750,16 +806,18 @@ impl Folder {
     }
 }
 
-/// Whether a list in a place shows an entry: a folder, or a file the
-/// installer takes. Hidden entries are left out, as the stock file manager
-/// leaves them out.
-fn installable(e: &FileRow) -> bool {
+/// Whether a place shows an entry: a folder, or a file of the kinds the page
+/// is for. Hidden entries are left out, as the stock file manager leaves them
+/// out.
+fn shown(e: &FileRow, wanted: &[&str]) -> bool {
     if e.name.starts_with('.') {
         return false;
     }
     match e.kind {
         FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => true,
-        FileKind::File | FileKind::Link { folder: false, .. } => installs(e),
+        FileKind::File | FileKind::Link { folder: false, .. } => {
+            wanted.iter().any(|ext| e.name.to_ascii_lowercase().ends_with(ext))
+        }
         FileKind::Special => false,
     }
 }
@@ -863,6 +921,8 @@ pub enum Confirm {
     InstallWipe,
     /// Run the install script of the zip that waits to be agreed to.
     RunScript,
+    /// Patch the boot image the phone's root manager patches.
+    PatchRoot,
     /// Merge the update that waits in the slot the phone runs from.
     Merge,
     /// Give the data partition's files the SELinux labels the installed
@@ -1013,16 +1073,20 @@ pub enum Install {
     Waiting,
     /// The package of `size` bytes is looked at; a zip's signature is
     /// checked, once the installer tells how far.
-    Checking { size: u64, stage: Option<Stage> },
+    Checking { size: u64, stage: Option<Stage>,
+    },
     /// An image waits to be told where it goes.
     Choosing(Choice),
     /// An update waits for the user to agree: the version it brings, and
     /// whether all user data is erased after it.
-    Confirming { version: Option<String>, wipe: bool },
+    Confirming { version: Option<String>, wipe: bool,
+    },
     /// `overwriting` says whether the update writes over the running
     /// system.
-    Updating { version: Option<String>, stage: Option<Stage>, overwriting: bool },
-    Flashing { partition: &'static str, stage: Option<Stage> },
+    Updating { version: Option<String>, stage: Option<Stage>, overwriting: bool,
+    },
+    Flashing { partition: &'static str, stage: Option<Stage>,
+    },
     /// A zip with an install script waits for the user to agree to run it.
     ConfirmingScript,
     /// A system to install beside the installed one waits for the room its
@@ -1032,9 +1096,11 @@ pub enum Install {
     Systeming { name: String, stage: Option<Stage> },
     /// Its install script is made ready and then, once `running`, runs; how
     /// far it says it is, once it says.
-    Scripting { stage: Option<Stage>, running: bool },
+    Scripting { stage: Option<Stage>, running: bool,
+    },
     /// `damage` is what a failure may have left broken.
-    Finished { outcome: Outcome, damage: Option<Damage> },
+    Finished { outcome: Outcome, damage: Option<Damage>,
+    },
     /// In rescue, all user data is being erased, as the computer asked.
     Wiping,
     /// In rescue, erasing all user data ended: done, or why it stopped.
@@ -1159,6 +1225,145 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
     (["美国太平洋时间", "美國太平洋時間", "Pacific Time"], ["洛杉矶", "洛杉磯", "Los Angeles"], "America/Los_Angeles"),
 ];
 
+/// What the download page says while a package is on its way.
+/// The partitions an image of the phone's own is written to, in the order a
+/// page lists them: those the phone has.
+pub fn root_partitions() -> Vec<&'static str> {
+    let slot = skyward_vab::current_slot().ok().flatten();
+    let by_name = std::path::Path::new(skyward_root::BY_NAME);
+    ["boot", "init_boot"]
+        .into_iter()
+        .filter(|name| match slot {
+            Some(slot) => by_name.join(format!("{name}{}", slot.suffix())).exists(),
+            None => true,
+        })
+        .collect()
+}
+
+/// What a folder opened from a page of the root's own is picking.
+/// How far the taking of an image out of a package has come: the image's
+/// name, the bytes written, and how many there are in all.
+static TAKING: std::sync::Mutex<Option<(String, u64, u64)>> = std::sync::Mutex::new(None);
+
+/// What came of the last one: the file its image went to, or why it did not.
+static TAKEN: std::sync::Mutex<Option<Result<String, String>>> = std::sync::Mutex::new(None);
+
+/// How far the image being taken out of a package has come, if one is.
+pub fn taking() -> Option<(String, u64, u64)> {
+    TAKING.lock().ok().and_then(|held| held.clone())
+}
+
+/// What came of it, once it has: taken by the caller, so it is only seen once.
+pub fn take_taken() -> Option<Result<String, String>> {
+    TAKEN.lock().ok().and_then(|mut held| held.take())
+}
+
+/// The partitions an install writes an image to, by the names a package
+/// gives them.
+/// Where a package sits and how its steps count: its path, the offset its
+/// payload begins at, its size, and the block size.
+type PackageFile = (String, u64, u64, u64);
+
+/// The partitions a package holds, by name and size.
+type PackageList = Vec<(String, u64)>;
+
+/// What the images taken out of a package are on show for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageMode {
+    /// One of them is the image the patch writes.
+    Patch,
+    /// One of them is flashed on its own.
+    Flash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootPick {
+    /// The manager a patch runs with.
+    Manager,
+    /// The image a patch writes.
+    Image,
+    /// A whole system package, whose boot and init_boot are taken out of it.
+    Package,
+    /// A whole system package, every partition of which comes out to be
+    /// flashed on its own.
+    Parts,
+}
+
+/// Where the patcher a root patch runs comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RootSource {
+    /// The manager the phone has, in its folder on the data partition.
+    #[default]
+    Installed,
+    /// An APK the user picked.
+    Apk(String),
+}
+
+/// Where the image a patch writes comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RootImage {
+    /// The image the partition holds now.
+    #[default]
+    Partition,
+    /// An image file the user picked.
+    File(String),
+}
+
+/// The way to a manager the page took, which its row shows a check for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ManagerWay {
+    /// No way taken yet.
+    #[default]
+    None,
+    /// The manager the phone has, under the data partition.
+    LastUsed,
+    /// An app whose package carries a manager's library.
+    Installed,
+    /// A package on the phone.
+    Storage,
+    /// A package downloaded from the manager's own repository.
+    Download,
+}
+
+impl ManagerWay {
+    /// What the page calls it, in the bar that starts the patch.
+    pub fn name(self, l: Lang) -> &'static str {
+        match self {
+            ManagerWay::None => l.pick(["未选择", "未選擇", "none"]),
+            ManagerWay::LastUsed => l.pick(["上次使用的管理器", "上次使用的管理器", "The manager used last time"]),
+            ManagerWay::Installed => l.pick(["从已安装管理器中选择", "從已安裝管理器中選擇", "An installed manager"]),
+            ManagerWay::Storage => l.pick(["从内部存储选择", "從內部儲存空間選擇", "From internal storage"]),
+            ManagerWay::Download => l.pick(["网络下载", "網路下載", "Downloaded"]),
+        }
+    }
+}
+
+/// The way to an image the page took.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageWay {
+    /// No way taken yet.
+    #[default]
+    None,
+    /// The image the partition holds now, for the partition chosen.
+    Direct,
+    /// An image file the user picked.
+    File,
+    /// An image out of a system package.
+    Package,
+}
+
+impl ImageWay {
+    /// What the page calls it, in the bar that starts the patch.
+    pub fn name(self, l: Lang) -> &'static str {
+        match self {
+            ImageWay::None => l.pick(["未选择", "未選擇", "none"]),
+            ImageWay::Direct => l.pick(["本机镜像", "本機鏡像", "This phone's image"]),
+            ImageWay::File => l.pick(["选择镜像文件进行修补", "選擇映像檔進行修補", "An image file"]),
+            ImageWay::Package => l.pick(["从完整系统包解析", "從完整系統包解析", "A system package"]),
+        }
+    }
+}
+
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -1170,9 +1375,26 @@ pub enum Action {
     /// Try opening the data partition again, after it did not open.
     OpenData,
     Back,
-    Theme { dark: bool },
+    Theme { dark: bool,
+    },
     Toggle(Switch),
     RebootTarget(usize),
+    /// Open the file manager on an image to patch and write.
+    OpenPatchImage,
+    /// Open the file manager on the packages of internal storage.
+    OpenPackages,
+    /// Open the partitions an image of the phone's own is written to.
+    OpenDirect,
+    /// Show the module at this place in the list.
+    OpenModule(usize),
+    /// Have the manager take the module at this place away when the phone
+    /// next starts.
+    RemoveModule(usize),
+    /// Download the manager and tier at this place in the list the download
+    /// page shows.
+    DownloadManager(usize),
+    /// Keep the module at this place after all, taking back a removal.
+    RestoreModule(usize),
     /// Choose or leave out what the wipe page erases.
     WipeItem(Wipe),
     /// A slider's track: touching or dragging it sets the slider's level.
@@ -1183,6 +1405,19 @@ pub enum Action {
     Confirm(Confirm),
     /// The pattern grid on the unlock page.
     Pattern,
+    /// Patch with the package a download left at this place in the list.
+    RootPackage(usize),
+    /// Pick a whole system package to take boot and init_boot out of.
+    OpenSystemPackage,
+    /// Pick a whole system package to take every partition out of, to flash
+    /// one of them.
+    OpenPackageParts,
+    /// Pick the image taken out of a package at this place in the list.
+    PickPackageImage(usize),
+    /// Flash the image that was taken out of a package.
+    FlashTaken,
+    /// Open the proxy page, holding the one every request goes through now.
+    OpenProxy,
     /// Start receiving a package over USB.
     Sideload,
     /// Send the image to one of the partitions it fits.
@@ -1332,7 +1567,8 @@ pub struct Hit {
 pub struct Frame {
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
-    pub title: &'static str,
+    /// The page's own heading: a name of its own, or one it is given.
+    pub title: Cow<'static, str>,
     pub back: bool,
     /// The page opens with its title in large type, scrolling away with it.
     pub header: bool,
@@ -1513,7 +1749,7 @@ impl Frame {
         Frame {
             canvas,
             hits,
-            title,
+            title: Cow::Borrowed(title),
             back: true,
             header: true,
             content_top,
@@ -1589,6 +1825,16 @@ pub struct State {
     /// place in [`TIME_ZONES`].
     pub time_zone: usize,
     pub vibrate: bool,
+    /// Hardware capability, independent of the saved touch-feedback preference.
+    pub supports_vibration: bool,
+    /// Use the tablet layout and offer tablet display preferences.
+    pub tablet: bool,
+    /// Follow the orientation sensor; off keeps the current direction.
+    pub auto_rotate: bool,
+    /// Whether the phone's configuration names the sensors the pages turn
+    /// with: a tablet whose recovery cannot read them offers no switch.
+    pub sensors: bool,
+    pub rotation: crate::rotation::Rotation,
     /// How strongly the motor taps, from 0 at the slider's left end to 1
     /// at its right.
     pub vibration: f32,
@@ -1621,6 +1867,58 @@ pub struct State {
     /// Skyward goes back into the recovery partitions an install writes
     /// over.
     pub keep_recovery: bool,
+    /// Which manager and tier the download page offers.
+    pub root_variant: usize,
+    /// Which tier of it: stable or dev.
+    pub root_tier: usize,
+    /// Which way to GitHub a download goes by.
+    pub root_proxy: usize,
+    /// Whether an install patches the slot it writes into with the phone's
+    /// root manager.
+    pub keep_root: bool,
+    /// The partitions an install keeps as they are, by name.
+    pub keep_partitions: Vec<String>,
+    /// The manager the phone has, as the root page names it.
+    pub root_manager: Option<String>,
+    /// What the root page says of the last patch.
+    pub root_said: Option<String>,
+    /// The partition the root page patches; the one the phone uses, unless
+    /// it was changed.
+    pub root_partition: Option<&'static str>,
+    /// Which image a patch writes: the partition's own, or a file.
+    pub root_image: RootImage,
+    /// What the folder on show is picking, where a page of the root's own
+    /// opened it: the install page's own folder otherwise.
+    pub root_pick: Option<RootPick>,
+    /// What the images on show are for: the patch, or a flash of their own.
+    pub package_mode: Option<PackageMode>,
+    /// The package the images come from: its path, where its payload sits,
+    /// how large it is, and the blocks its steps count in.
+    pub package_file: Option<(String, u64, u64, u64)>,
+    /// The partitions the package holds, by name and size.
+    pub package_list: Option<Vec<(String, u64)>>,
+    /// An image taken out of a package, waiting to be flashed.
+    pub pending_flash: Option<String>,
+    /// Why a package could not be taken apart, for the install page.
+    pub package_said: Option<String>,
+    /// The network being joined with the key the phone keeps for it, which a
+    /// refusal of asks a password for instead.
+    pub saved_try: Option<skyward_net::wlan::Network>,
+    /// The way to the manager chosen, and to the image, which the page
+    /// checks and the patch bar names.
+    pub root_manager_way: ManagerWay,
+    pub root_image_way: ImageWay,
+    /// What the images the phone starts from hold: each partition, and the
+    /// manager in it, once read.
+    pub root_images: Option<Vec<(String, Option<skyward_root::apk::Kind>)>>,
+    /// Where the patcher comes from: the manager the phone has, an APK the
+    /// user picks, or one downloaded.
+    pub root_source: RootSource,
+    /// The module the page of one shows, by its place in the list.
+    pub module: Option<usize>,
+    /// The modules the manager has, as the pages list them; none until they
+    /// are read.
+    pub modules: Option<Vec<skyward_root::modules::Module>>,
     /// How Skyward went back into the recovery partitions the install
     /// wrote over, where it did.
     pub reflash: Option<Reflash>,
@@ -1736,6 +2034,8 @@ pub struct State {
     /// The password typed on the password page or the page that adds a
     /// network, and whether it shows.
     pub password: String,
+    /// What the proxy page has typed.
+    pub proxy_text: String,
     pub show_password: bool,
     /// The phone maker's update server is known, and the update page asks
     /// it.
@@ -1763,6 +2063,11 @@ impl Default for State {
             screen_off: 3,
             time_zone: 0,
             vibrate: true,
+            supports_vibration: true,
+            tablet: false,
+            auto_rotate: true,
+        sensors: false,
+            rotation: crate::rotation::Rotation::Native,
             vibration: SLIDER_START,
             file_transfer: true,
             reboot: 0,
@@ -1778,6 +2083,29 @@ impl Default for State {
             check_signature: false,
             recovery_partitions: false,
             keep_recovery: true,
+        keep_root: true,
+        keep_partitions: Vec::new(),
+        root_manager: None,
+        root_said: None,
+        root_variant: 0,
+        root_tier: 0,
+        root_proxy: 0,
+        root_partition: None,
+        root_image: RootImage::Partition,
+        root_pick: None,
+            package_said: None,
+            package_mode: None,
+            package_file: None,
+            package_list: None,
+            pending_flash: None,
+        saved_try: None,
+        root_manager_way: ManagerWay::None,
+        // The image is always there to be taken: the one the partition holds.
+        root_image_way: ImageWay::Direct,
+        root_images: None,
+        root_source: RootSource::Installed,
+        modules: None,
+        module: None,
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
@@ -1827,6 +2155,7 @@ impl Default for State {
             details: None,
             adding: None,
             password: String::new(),
+            proxy_text: String::new(),
             show_password: false,
             update_server: false,
             check: Check::Idle,
@@ -1961,7 +2290,8 @@ pub enum Effect {
     /// screenshots in the owner's shared storage where `storage` says it is
     /// open, and otherwise held until it is, telling how it went with
     /// [`App::screenshot_saved`].
-    Screenshot { storage: bool },
+    Screenshot { storage: bool,
+    },
     /// Offer internal storage to a computer over USB, or stop.
     FileTransfer(bool),
     /// Start receiving a package over USB.
@@ -1974,12 +2304,22 @@ pub enum Effect {
     InstallPath(String),
     /// Write the image the installer holds to `partition` in the slots
     /// `pick` means.
-    Flash { partition: &'static str, pick: Pick },
+    Flash { partition: &'static str, pick: Pick,
+    },
     /// Stop waiting for the computer, for where an image goes, or for an
     /// update to be agreed to.
     Cancel,
     /// Read the slot's partitions for the mount page, which has just opened.
     ReadMounts,
+    /// Patch the image the manager patches, and write it to the partition.
+    PatchRoot,
+    /// Download the manager and tier at this place in the list the page
+    /// shows, telling how it goes with [`App::download_progress`] and
+    /// [`App::download_ended`] as the system's own package does.
+    DownloadManager(usize),
+    /// Go through this proxy, as `host:port`, for every request: empty where
+    /// none is to be used.
+    SetProxy(String),
     /// Read what the boot control holds of the slots, telling it with
     /// [`App::set_boot_slots`].
     ReadSlots,
@@ -2014,7 +2354,8 @@ pub enum Effect {
     /// Open the own files of `user` with what they entered at their screen
     /// lock, telling what still waits with [`App::data_waiting`] or why it
     /// did not open with [`App::unlock_failed`].
-    Unlock { user: u32, code: String },
+    Unlock { user: u32, code: String,
+    },
     /// Hand the USB port back from fastboot to adb, bring up what the
     /// recovery runs from the slot's partitions, then show its pages with
     /// [`App::enter_recovery`].
@@ -2043,13 +2384,16 @@ pub enum Effect {
     TermInput(Vec<u8>),
     /// Copy or move an entry into a folder; with no choice made yet, a name
     /// taken there is told with [`App::file_clash`] instead of going on.
-    Paste { op: FileOp, path: String, into: String, clash: Option<ClashChoice> },
+    Paste { op: FileOp, path: String, into: String, clash: Option<ClashChoice>,
+    },
     /// Give an entry a new name; how it went comes back with
     /// [`App::renamed`].
-    Rename { path: String, name: String },
+    Rename { path: String, name: String,
+    },
     /// Give an entry these permission bits; how it went comes back with
     /// [`App::mode_set`].
-    SetMode { path: String, mode: u32 },
+    SetMode { path: String, mode: u32,
+    },
     /// Read the file at this path to edit it, as much as
     /// [`editor::MAX_BYTES`] and one byte more, telling what it holds with
     /// [`App::text_opened`].
@@ -2057,7 +2401,8 @@ pub enum Effect {
     /// Write `text` as the contents of the file at `path`, which keeps what
     /// it has beside them; how it went comes back with
     /// [`App::text_saved`].
-    SaveText { path: String, text: String },
+    SaveText { path: String, text: String,
+    },
     /// Delete an entry, folders whole.
     Delete(String),
     /// Stop the work on files under way.
@@ -2077,25 +2422,31 @@ pub enum Effect {
     /// [`App::part_at`], [`App::part_ended`] and [`App::part_work_ended`];
     /// making the data partition afresh as another filesystem is a factory
     /// reset, which tells as erasing tells.
-    Filesystem { name: String, action: FsAction },
+    Filesystem { name: String, action: FsAction,
+    },
     /// Save the logs chosen, the recovery's own and the kernel's, into a
     /// folder of their own in internal storage or the temporary folder,
     /// saying where with [`App::report`].
-    ExportLogs { recovery: bool, kernel: bool, storage: bool },
+    ExportLogs { recovery: bool, kernel: bool, storage: bool,
+    },
     /// Back up the parts ticked, by their place in [`BACKUP_PARTS`], into
     /// a folder of their own in `place`, telling how it goes with
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
-    Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool },
+    Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool,
+    },
     /// Restore the parts ticked of the backup in the folder `name` of
     /// `place`, telling how it goes as a backup does.
-    Restore { place: Place, name: String, parts: [bool; 4] },
+    Restore { place: Place, name: String, parts: [bool; 4],
+    },
     /// Look for backups in the places that can be read, telling what is
     /// found with [`App::set_backups`].
-    FindBackups { storage: bool, usb: bool },
+    FindBackups { storage: bool, usb: bool,
+    },
     /// Delete the backup in the folder `name` of `place`, telling how it
     /// went with [`App::backup_deleted`].
-    DeleteBackup { place: Place, name: String },
+    DeleteBackup { place: Place, name: String,
+    },
     /// Stop the backup under way, or the check before a restore.
     StopBackup,
     /// Read where the update stands, telling it with [`App::set_update`].
@@ -2104,7 +2455,8 @@ pub enum Effect {
     /// [`App::set_wlan`].
     Wlan(bool),
     ScanWlan,
-    JoinWlan { ssid: Vec<u8>, name: String, security: Security, password: Secret },
+    JoinWlan { ssid: Vec<u8>, name: String, security: Security, password: Secret,
+    },
     LeaveWlan,
     /// Ask the update server for the newest system, telling what it
     /// answered with [`App::update_checked`].
@@ -2132,20 +2484,25 @@ enum Drag {
     /// press began at a screen edge (true for the left one).
     /// `at` is when it came down: held long enough over an entry of the file
     /// manager, it opens what can be done with that entry.
-    Press { x: f32, y: f32, action: Option<Action>, edge: Option<bool>, at: u64 },
+    Press { x: f32, y: f32, action: Option<Action>, edge: Option<bool>, at: u64,
+    },
     /// A press held long enough to have done its work; nothing it does
     /// counts until it lifts.
     Held,
-    Scroll { last: f32 },
+    Scroll { last: f32,
+    },
     /// Swiping in from a screen edge, the finger now `x` across; the cue
     /// keeps to height `cy`, set by where the swipe began. Past the
     /// threshold, lifting goes back.
-    Edge { start: f32, from_left: bool, armed: bool, x: f32, cy: f32 },
+    Edge { start: f32, from_left: bool, armed: bool, x: f32, cy: f32,
+    },
     Slider(Slider, Rect),
-    Confirm { which: Confirm, track: Rect, grab: f32 },
+    Confirm { which: Confirm, track: Rect, grab: f32,
+    },
     /// Scrolling a terminal's screen back through what the shell wrote, or
     /// the editor's text, `carry` being the part of a row not yet scrolled.
-    History { last: f32, carry: f32, pitch: f32 },
+    History { last: f32, carry: f32, pitch: f32,
+    },
     Pattern,
     /// A finger that landed just after the panel lit; nothing it does
     /// counts until it lifts.
@@ -2588,6 +2945,10 @@ fn keyboard_strip(t: &Theme, frame: &Frame) -> (Canvas, i32) {
 }
 
 pub struct App {
+    tablet: Option<crate::tablet::Tablet>,
+    tablet_mode: bool,
+    full_width: u32,
+    minimum_brightness: f32,
     pub state: State,
     /// The pages open, the one shown last: each with how far it is
     /// scrolled and where the keys are on it.
@@ -2625,7 +2986,7 @@ pub struct App {
     /// The current page's large and bar titles, for their words and the
     /// theme, with their blurred versions as they are needed. A page can
     /// change its title in place, as work on files does once it ends.
-    titles: Option<((&'static str, bool), Blurs, Blurs)>,
+    titles: Option<((String, bool), Blurs, Blurs)>,
     /// The icon and words of the current page's folding search bar, for
     /// its words and the theme.
     search_words: Option<((&'static str, bool), Canvas)>,
@@ -2670,6 +3031,7 @@ pub struct App {
     /// while other pages show.
     term: Option<Term>,
     display_on: bool,
+    touching: bool,
     /// When the screen was last touched or a key pressed; set on the first
     /// tick, so the time before the UI started does not count.
     active: Option<u64>,
@@ -2689,6 +3051,8 @@ pub struct App {
     charging: Option<Charging>,
     charge_art: Option<charge::Art>,
     charge_canvas: Option<Canvas>,
+    /// Charging covers the physical display, wider than a tablet detail pane.
+    charge_dither: Option<glow::Dither>,
     /// While a text field's cursor is up: the page, how many edits had
     /// been typed, and when it came up whole on them. It shows for the
     /// first half of each blink from then on, so it is whole again at each
@@ -2733,6 +3097,10 @@ pub struct App {
 impl App {
     pub fn new(start: Screen, w: u32, h: u32, px_per_dp: f32) -> Self {
         App {
+            tablet: None,
+            tablet_mode: false,
+            full_width: w,
+            minimum_brightness: MIN_BRIGHTNESS,
             state: State::default(),
             stack: vec![(start, 0.0, Focus::Unset)],
             frame: None,
@@ -2769,6 +3137,7 @@ impl App {
             glow: None,
             term: None,
             display_on: true,
+            touching: false,
             active: None,
             woke_at: None,
             bright: full_brightness(),
@@ -2777,6 +3146,7 @@ impl App {
             charging: None,
             charge_art: None,
             charge_canvas: None,
+            charge_dither: None,
             blink: None,
             edits: 0,
             caret_shown: false,
@@ -2803,6 +3173,73 @@ impl App {
         self.corners = radius;
     }
 
+    /// Apply device capabilities before the first frame is drawn.
+    pub fn configure_device(&mut self, cfg: &skyward_config::DeviceConfig) {
+        self.state.supports_vibration = cfg.device.supports_vibration.unwrap_or(cfg.haptics.is_some());
+        self.state.tablet = cfg.device.tablet;
+        self.state.sensors = cfg.orientation.is_some();
+        if let (Some(bottom), Some(top)) = (cfg.display.minimum_brightness, cfg.display.normal_brightness) {
+            self.minimum_brightness = bottom as f32 / top as f32;
+        }
+        self.resize(self.full_width, self.h);
+        self.refresh();
+    }
+
+    /// Rebuild geometry-dependent art without replacing pages, jobs or typed text.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let tablet = self.state.tablet && self.screen() != Screen::Fastboot
+            && width.min(height) as f32 / self.px_per_dp >= 600.0;
+        if (self.full_width, self.h, self.tablet_mode) == (width, height, tablet) {
+            return;
+        }
+        self.full_width = width;
+        self.h = height;
+        self.tablet_mode = tablet;
+        let sidebar = if tablet { width / 3 } else { 0 };
+        self.w = width - sidebar;
+        self.tablet = tablet.then(|| crate::tablet::Tablet::new(sidebar, self.w, height, self.px_per_dp));
+        self.end_turn();
+        self.backdrop = None;
+        self.morph = None;
+        self.cue = None;
+        self.drag = Drag::Idle;
+        self.tracker = Tracker::default();
+        self.state.held = None;
+        self.state.confirm = 0.0;
+        self.search_words = None;
+        self.chip = None;
+        self.button_chip = None;
+        self.dither = None;
+        self.charge_art = None;
+        self.charge_canvas = None;
+        self.charge_dither = None;
+        let glow = self.glow.take();
+        self.settle_page();
+        self.glow = glow;
+        self.refresh();
+        self.spare.clear();
+    }
+
+    /// Fastbootd always uses the panel's original direction and full width.
+    pub fn rotation(&self) -> crate::rotation::Rotation {
+        if self.state.tablet && self.screen() != Screen::Fastboot {
+            self.state.rotation
+        } else {
+            crate::rotation::Rotation::Native
+        }
+    }
+
+    /// A stable sensor reading may change direction while the panel is lit.
+    pub fn follow_rotation(&mut self, rotation: crate::rotation::Rotation) {
+        if self.rotation_enabled() && !self.touching {
+            self.state.rotation = rotation;
+        }
+    }
+
+    pub fn rotation_enabled(&self) -> bool {
+        self.state.tablet && self.state.auto_rotate && self.display_on && self.screen() != Screen::Fastboot
+    }
+
     pub fn theme(&self) -> Theme {
         if self.state.dark {
             Theme::dark(self.w, self.h, self.px_per_dp)
@@ -2813,6 +3250,15 @@ impl App {
 
     pub fn screen(&self) -> Screen {
         self.top().0
+    }
+
+    pub(crate) fn tablet_selection(&self) -> Screen {
+        self.stack.iter().map(|p| p.0).find(|&s| crate::tablet::is_section(s)).unwrap_or(Screen::About)
+    }
+
+    fn can_go_back(&self) -> bool {
+        self.stack.len() > 1 && !(self.tablet_mode && self.stack.len() == 2
+            && self.stack[0].0 == Screen::Home && crate::tablet::is_section(self.screen()))
     }
 
     fn top(&self) -> &(Screen, f32, Focus) {
@@ -2894,7 +3340,7 @@ impl App {
         self.state.file = Some(entry);
         self.state.asking_delete = false;
         self.open(Screen::FileInfo);
-        if self.state.vibrate {
+        if self.state.supports_vibration && self.state.vibrate {
             vec![Effect::Haptic]
         } else {
             Vec::new()
@@ -3081,7 +3527,8 @@ impl App {
 
     /// Bring the bar and its title in or out as the page scrolls.
     fn follow_scroll(&mut self, now: u64) {
-        let Some((title, bar)) = self.bar_wanted() else { return };
+        let Some((title, bar)) = self.bar_wanted() else { return;
+        };
         self.title.set(title, now);
         self.bar.set(bar, now);
         if self.title.moving(now) || self.bar.moving(now) {
@@ -3192,6 +3639,7 @@ impl App {
         self.darkening = self.panel(now);
         self.curtain.set(false, now);
         self.display_on = false;
+        self.touching = false;
         self.bright = full_brightness();
         match std::mem::replace(&mut self.drag, Drag::Idle) {
             Drag::Confirm { .. } => {
@@ -3252,6 +3700,9 @@ impl App {
 
     /// The page's readings changed (battery, storage): render it again.
     pub fn refresh(&mut self) {
+        if self.tablet_mode && self.screen() == Screen::Home {
+            self.stack.push((Screen::About, 0.0, Focus::Unset));
+        }
         self.frame = None;
         self.stale.clear();
         self.spots = None;
@@ -3306,6 +3757,208 @@ impl App {
 
     /// The runtime read the mount table again, or could not: keep it and
     /// show it if it changed.
+    /// The manager the phone has, as the root page names it.
+    pub fn set_root(&mut self, manager: Option<String>) {
+        self.state.root_manager = manager;
+    }
+
+    /// An image chosen on a page is written, or patched and written, as the
+    /// row that opened the page asked.
+    /// Takes the package at `path` apart as far as its manifest goes, so the
+    /// page lists what it holds at once.
+    fn package_chosen(&mut self, path: &str) {
+        self.package_manifest(path, false);
+    }
+
+    /// The same for the install page, which lists every partition.
+    fn package_parts_chosen(&mut self, path: &str) {
+        self.package_manifest(path, true);
+    }
+
+    fn package_manifest(&mut self, path: &str, all: bool) {
+        self.state.root_pick = None;
+        self.state.package_list = None;
+        self.state.package_file = None;
+        self.state.package_said = None;
+        let read = (|| -> anyhow::Result<(PackageFile, PackageList)> {
+            let mut file = std::fs::File::open(path)?;
+            let update = match skyward_install::package::identify(&mut file)? {
+                skyward_install::package::Package::Update(update) => update,
+                _ => anyhow::bail!("this package holds no update payload"),
+            };
+            let manifest = skyward_install::payload::read(&mut file, update.payload_offset, update.payload_size)?;
+            let block = manifest.block();
+            let mut listed = Vec::new();
+            let mut left = Vec::new();
+            // What a page takes out is what an install can write: the
+            // partitions the installer has a name for, and no others.
+            for partition in &manifest.partitions {
+                let wanted = match all {
+                    true => true,
+                    false => partition.name == "boot" || partition.name == "init_boot",
+                };
+                if !wanted {
+                    continue;
+                }
+                if !partition.carried() {
+                    let steps: Vec<String> = partition.operations.iter().map(|operation| operation.kind.name()).collect();
+                    left.push(format!("{}（{}）", partition.name, steps.join(" ")));
+                    continue;
+                }
+                listed.push((partition.name.clone(), partition.size));
+            }
+            anyhow::ensure!(
+                !listed.is_empty(),
+                "包里没有可提取的分区：{}",
+                match left.is_empty() {
+                    true => "未找到 boot / init_boot".to_string(),
+                    false => left.join("、"),
+                }
+            );
+            if !left.is_empty() {
+                self.state.package_said = Some(format!("未取出：{}", left.join("、")));
+            }
+            Ok(((path.to_string(), update.payload_offset, update.payload_size, block), listed))
+        })();
+        match read {
+            Ok((file, listed)) => {
+                self.state.package_file = Some(file);
+                self.state.package_list = Some(listed);
+                self.state.package_mode = Some(match all {
+                    true => PackageMode::Flash,
+                    false => PackageMode::Patch,
+                });
+                self.open(Screen::PackageImages);
+            }
+            Err(e) => {
+                self.state.package_said = Some(format!("{e:#}"));
+                self.state.package_mode = Some(match all {
+                    true => PackageMode::Flash,
+                    false => PackageMode::Patch,
+                });
+                self.open(Screen::PackageImages);
+            }
+        }
+    }
+
+    /// Starts taking the partition at `name` out of the package on show, to
+    /// internal storage, on a thread of its own.
+    fn package_take(&mut self, name: &str) {
+        let Some((path, offset, size, block)) = self.state.package_file.clone() else {
+            self.state.package_said = Some("no package on show".into());
+            return;
+        };
+        let name = name.to_string();
+        if let Ok(mut held) = TAKING.lock() {
+            *held = Some((name.clone(), 0, 1));
+        }
+        std::thread::spawn(move || {
+            let taken = (|| -> anyhow::Result<String> {
+                let mut file = std::fs::File::open(&path)?;
+                let manifest = skyward_install::payload::read(&mut file, offset, size)?;
+                let partition = manifest.partitions.iter().find(|one| one.name == name).ok_or_else(|| anyhow::anyhow!("{name} is not in this package"))?;
+                let dir = std::path::Path::new("/sdcard/image");
+                std::fs::create_dir_all(dir)?;
+                let out = format!("/sdcard/image/{name}.img");
+                skyward_install::payload::extract_while(&mut file, manifest.data_at, block, partition, std::path::Path::new(&out), &mut |done, all| {
+                    if let Ok(mut held) = TAKING.lock() {
+                        *held = Some((name.clone(), done, all));
+                    }
+                })?;
+                Ok(out)
+            })();
+            if let Ok(mut held) = TAKING.lock() {
+                *held = None;
+            }
+            if let Ok(mut held) = TAKEN.lock() {
+                *held = Some(taken.map_err(|e| format!("{e:#}")));
+            }
+        });
+    }
+
+
+    /// The image taken out of a package is ready, or it is not: the page
+    /// goes where its mode says.
+    /// Puts the install page on show, for an image taken out of a package
+    /// that the installer has just taken.
+    pub fn show_install(&mut self) {
+        self.open(Screen::Installing);
+    }
+
+    pub fn package_taken(&mut self, taken: Result<String, String>) {
+        match taken {
+            Ok(path) => match self.state.package_mode {
+                Some(PackageMode::Flash) => {
+                    self.state.package_said = Some(format!("已提取到 {path}，点上方一行进入刷入页"));
+                    self.state.pending_flash = Some(path);
+                }
+                _ => {
+                    self.root_image_chosen(ImageWay::Package, RootImage::File(path));
+                    self.open(Screen::Root);
+                }
+            },
+            Err(e) => {
+                self.state.package_said = Some(e);
+                self.open(Screen::PackageImages);
+            }
+        }
+    }
+
+    pub fn root_image_chosen(&mut self, way: ImageWay, image: RootImage) {
+        self.state.root_image_way = way;
+        self.state.root_image = image;
+        self.state.root_said = None;
+        self.back_to_root();
+    }
+
+    /// A manager chosen becomes the one the patch runs, and the page it was
+    /// chosen on gives way to the root page.
+    pub fn root_manager_chosen(&mut self, way: ManagerWay, source: RootSource) {
+        self.state.root_manager_way = way;
+        self.state.root_source = source;
+        self.state.root_said = None;
+        self.back_to_root();
+    }
+
+    /// Go back to the root page a choice was made for, and not open another
+    /// one over it: choosing a manager or an image leaves no page behind.
+    fn back_to_root(&mut self) {
+        if self.stack.len() > 1 && self.stack.iter().any(|(screen, _, _)| *screen == Screen::Root) {
+            self.leave(true);
+            while self.screen() != Screen::Root && self.stack.len() > 1 {
+                self.stack.pop();
+            }
+            self.state.confirm = 0.0;
+            self.settle_page();
+            self.refresh();
+        } else {
+            self.open(Screen::Root);
+        }
+    }
+
+    /// The package a page chose becomes the one the next page patches with.
+    pub fn root_package_chosen(&mut self, path: String) {
+        self.root_manager_chosen(ManagerWay::Download, RootSource::Apk(path));
+    }
+
+    /// What the last patch came to.
+    pub fn root_ended(&mut self, said: String) {
+        self.state.root_said = Some(said);
+        self.refresh();
+    }
+
+    /// The modules the manager has.
+    pub fn set_modules(&mut self, modules: Option<Vec<skyward_root::modules::Module>>) {
+        self.state.modules = modules;
+        self.refresh();
+    }
+
+    /// Read the modules the manager has, for the pages that list them.
+    pub fn read_modules(&mut self) {
+        let dir = std::path::Path::new(skyward_root::modules::MODULES);
+        self.state.modules = Some(skyward_root::modules::list(dir).unwrap_or_default());
+    }
+
     pub fn set_mounts(&mut self, mounts: Result<Vec<MountRow>, String>) {
         if self.state.mounts != mounts {
             self.state.mounts = mounts;
@@ -3345,6 +3998,13 @@ impl App {
         self.refresh();
     }
 
+    pub fn term_resized(&mut self, rows: u16, cols: u16) {
+        if let Some(term) = &mut self.term {
+            term.resize(rows, cols);
+            self.refresh();
+        }
+    }
+
     /// What the shell wrote.
     pub fn term_output(&mut self, bytes: &[u8]) {
         let term = self.term.as_mut().expect("only a shell that started writes");
@@ -3359,7 +4019,8 @@ impl App {
     pub fn term_ended(&mut self, end: TermEnd) {
         let (l, term) = (self.state.lang, self.term.as_mut().expect("only a shell that started ends"));
         let how = fmt::term_end(l, &end);
-        term.feed(tr!(l, "\r\n[{how}。按「回车」重新启动]\r\n", "\r\n[{how}。按「Enter」重新啟動]\r\n", "\r\n[{how}. Press Enter to start it again]\r\n").as_bytes());
+        term.feed(tr!(l, "\r\n[{how}。按「回车」重新启动]\r\n", "\r\n[{how}。按「Enter」重新啟動]\r\n", "\r\n[{how}. Press Enter to start it again]\r\n").as_bytes(),
+        );
         term.running = false;
         if self.screen() == Screen::Terminal {
             self.refresh();
@@ -3588,6 +4249,14 @@ impl App {
             return;
         }
         self.state.wlan = Some(w);
+        // The key the phone keeps was refused: the page asks for one, as it
+        // would have from the start.
+        let failed = self.state.wlan.as_ref().and_then(|w| w.joined.as_ref()).is_some_and(|j| matches!(j.stage, skyward_net::wlan::Stage::Failed | skyward_net::wlan::Stage::WrongPassword));
+        if failed {
+            if let Some(network) = self.state.saved_try.take() {
+                self.ask_password(network);
+            }
+        }
         if matches!(self.screen(), Screen::Home | Screen::Wlan | Screen::WlanNetwork | Screen::Update | Screen::SkywardUpdate) {
             self.refresh();
         }
@@ -3626,7 +4295,8 @@ impl App {
     }
 
     pub fn wlan_mark(&self) -> Option<WlanMark> {
-        let Some(Joined { stage: Joining::Connected(link), .. }) = self.state.wlan.as_ref()?.joined.as_ref() else { return None };
+        let Some(Joined { stage: Joining::Connected(link), .. }) = self.state.wlan.as_ref()?.joined.as_ref() else { return None;
+        };
         let t = self.state.traffic;
         let (speed, unit) = fmt::speed(t.rx + t.tx);
         Some(WlanMark { level: fmt::signal_level(link.signal), receiving: t.rx > 0, sending: t.tx > 0, speed, unit })
@@ -3651,7 +4321,7 @@ impl App {
         let job = self.state.download.as_mut().expect("only a download under way moves on");
         job.progress = Some(progress);
         job.rate = rate;
-        if self.screen() == Screen::Update {
+        if matches!(self.screen(), Screen::Update | Screen::RootDownload) {
             self.refresh();
         }
     }
@@ -3733,7 +4403,9 @@ impl App {
         let l = self.state.lang;
         let bits = match outcome {
             Ok(bits) => bits,
-            Err(why) => return self.report(&tr!(l, "修改权限失败：{why}", "修改權限失敗：{why}", "Couldn't change the permissions: {why}"), now),
+            Err(why) => {
+                return self.report(&tr!(l, "修改权限失败：{why}", "修改權限失敗：{why}", "Couldn't change the permissions: {why}"), now)
+            }
         };
         let entry = self.state.file.as_mut().expect("the permissions page shows an entry");
         entry.mode = (entry.mode & !0o7777) | bits;
@@ -3757,11 +4429,14 @@ impl App {
         let l = self.state.lang;
         let bytes = match read {
             Ok(Some(bytes)) => bytes,
-            Ok(None) => return self.say(l.pick(["暂不支持编辑超过 2 MB 的文件", "尚不支援編輯超過 2 MB 的檔案", "Files over 2 MB can't be edited"]), now),
+            Ok(None) => {
+                return self.say(l.pick(["暂不支持编辑超过 2 MB 的文件", "尚不支援編輯超過 2 MB 的檔案", "Files over 2 MB can't be edited"]), now)
+            }
             Err(why) => return self.report(&tr!(l, "读取失败：{why}", "讀取失敗：{why}", "Couldn't read it: {why}"), now),
         };
         let Some(text) = String::from_utf8(bytes).ok().filter(|text| !text.contains('\0')) else {
-            return self.say(l.pick(["仅支持编辑 UTF-8 编码的文本文件", "僅支援編輯 UTF-8 編碼的文字檔", "Only UTF-8 text files can be edited"]), now);
+            return self.say(l.pick(["仅支持编辑 UTF-8 编码的文本文件", "僅支援編輯 UTF-8 編碼的文字檔", "Only UTF-8 text files can be edited"]), now,
+            );
         };
         let l = editor::layout(&self.theme(), f);
         self.state.editor = Some(Editor::new(path, &text, l.cols as usize, l.rows as usize));
@@ -4001,7 +4676,15 @@ impl App {
     /// the place's top, or could not: it becomes the folder shown to choose
     /// a file to install in, with what it holds that may be installed.
     pub fn set_place(&mut self, place: Place, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
-        let files = files.map(|entries| entries.into_iter().filter(installable).collect());
+        // What the page is for says what it shows: a package, an image, or
+        // either of the two an install takes.
+        let wanted: &[&str] = match (self.screen(), self.state.root_pick) {
+            (_, Some(RootPick::Manager)) => &[".apk"],
+            (_, Some(RootPick::Image)) => &[".img"],
+            (_, Some(RootPick::Package | RootPick::Parts)) => &[".zip"],
+            _ => &[".zip", ".img"],
+        };
+        let files = files.map(|entries| entries.into_iter().filter(|e| shown(e, wanted)).collect());
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
@@ -4099,7 +4782,8 @@ impl App {
             for rows in std::mem::take(&mut self.stale) {
                 let band = Band { rows, cols: (0, self.cols) };
                 let cx = Ctx { t: &t, f, info, state: &self.state, term: self.term.as_ref(), band: Some(band) };
-                let fresh = pages::render(screen, &cx);
+                let mut fresh = pages::render(screen, &cx);
+                if self.tablet_mode && !self.can_go_back() { fresh.back = false; }
                 let mut canvas = self.frame.take().expect("checked above").canvas;
                 assert_eq!(canvas.h, fresh.canvas.h, "a page drawn again in part is as tall as it was");
                 canvas.replace(&fresh.canvas);
@@ -4113,6 +4797,7 @@ impl App {
             let band = Band { rows: (first, first + self.h), cols: (0, wide.min(self.w)) };
             let cx = Ctx { t: &t, f, info, state: &self.state, term: self.term.as_ref(), band: Some(band) };
             let mut frame = pages::render(screen, &cx);
+            if self.tablet_mode && !self.can_go_back() { frame.back = false; }
             // A page drawn in part across holds its rows whole, the columns
             // of them drawn on as they are needed.
             self.cols = frame.canvas.cols().end;
@@ -4147,7 +4832,8 @@ impl App {
     /// it scrolls into view; that done, make the About page field's dither,
     /// for that page to open without making it. Whether any is left to do.
     pub fn draw_ahead(&mut self, f: &Fonts, info: &DeviceInfo) -> bool {
-        let Some(frame) = &self.frame else { return false };
+        let Some(frame) = &self.frame else { return false;
+        };
         let (held, h) = (frame.canvas.held(), frame.canvas.h);
         if self.cols < self.w {
             self.draw_cols(f, info, self.w);
@@ -4226,7 +4912,16 @@ impl App {
     pub fn compose(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, clock: &str, now: u64) {
         let charge = self.charging.as_ref().map_or(0.0, |c| c.shown.level(now));
         if charge < 1.0 {
-            self.compose_page(out, f, info, clock, now);
+            if let Some(mut tablet) = self.tablet.take() {
+                self.compose_page(&mut tablet.detail, f, info, clock, now);
+                tablet.paint(out, f, self);
+                let mut t = self.theme();
+                t.m.w = out.w;
+                widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+                self.tablet = Some(tablet);
+            } else {
+                self.compose_page(out, f, info, clock, now);
+            }
         }
         if charge > 0.0 {
             self.compose_charging(out, f, info, charge, now);
@@ -4237,12 +4932,13 @@ impl App {
     /// The charging screen, `level` of the way over the page drawn on `out`.
     fn compose_charging(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, level: f32, now: u64) {
         let battery = info.battery.as_ref().expect("a cable went in on a phone whose battery is read");
-        let (t, lang) = (self.theme(), self.state.lang);
+        let (mut t, lang) = (self.theme(), self.state.lang);
+        t.m.w = out.w;
         if !self.charge_art.as_ref().is_some_and(|a| a.shows(lang, battery)) {
             self.charge_art = Some(charge::Art::new(f, &t.m, lang, battery).expect("the screens' face takes the charging screen's weight"));
         }
         let since = self.charging.as_ref().map_or(now, |c| c.since);
-        let dither = self.dither.get_or_insert_with(|| glow::Dither::new(out.w as usize, out.h as usize));
+        let dither = self.charge_dither.get_or_insert_with(|| glow::Dither::new(out.w as usize, out.h as usize));
         let art = self.charge_art.as_ref().expect("drawn above");
         if level >= 1.0 {
             charge::draw(out, art, &t.m, battery.level, now.saturating_sub(since), dither);
@@ -4286,10 +4982,10 @@ impl App {
         if self.toast.as_ref().is_some_and(|m| now >= m.1) {
             self.toast = None;
         }
-        let title = self.frame.as_ref().expect("rendered above").title;
-        let key = (title, self.state.dark);
+        let title = self.frame.as_ref().expect("rendered above").title.to_string();
+        let key = (title.clone(), self.state.dark);
         if self.titles.as_ref().is_none_or(|(k, _, _)| *k != key) {
-            self.titles = Some((key, Blurs::new(widgets::big_title(&t, f, title)), Blurs::new(widgets::small_title(&t, f, title))));
+            self.titles = Some((key, Blurs::new(widgets::big_title(&t, f, &title)), Blurs::new(widgets::small_title(&t, f, &title))));
         }
         if let Some(fold) = self.frame.as_ref().and_then(|fr| fr.fold) {
             let key = (fold.hint, self.state.dark);
@@ -4378,7 +5074,9 @@ impl App {
         }
         self.shown = Some(view);
 
-        widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        if !self.tablet_mode {
+            widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        }
         if let Some((text, _)) = &self.toast {
             widgets::toast(out, &t, f, text);
         }
@@ -4648,7 +5346,9 @@ impl App {
         draw_faded(out, disc, 0.0, 0.0, t.pal.search, shown, blur);
         draw_faded(out, cross, 0.0, 0.0, t.pal.text, shown, blur);
         self.morph = Some(morph);
-        widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        if !self.tablet_mode {
+            widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+        }
         if let Some((text, _)) = &self.toast {
             widgets::toast(out, &t, f, text);
         }
@@ -4657,6 +5357,25 @@ impl App {
     /// Put the page back where it rests, for a page just opened or returned
     /// to; its first frame shows the bar as its scroll has it.
     fn settle_page(&mut self) {
+        if self.screen() == Screen::Modules {
+            self.read_modules();
+        }
+        // The images the phone starts from are read once, when the root page
+        // opens: they are the slowest thing it could do on every frame.
+        if self.screen() == Screen::Root && self.state.root_images.is_none() {
+            let slot = skyward_vab::current_slot().ok().flatten();
+            let mut found = Vec::new();
+            if let Some(slot) = slot {
+                for partition in ["boot", "init_boot"] {
+                    let by_name = std::path::Path::new(skyward_root::BY_NAME);
+                    if !by_name.join(format!("{partition}{}", slot.suffix())).exists() {
+                        continue;
+                    }
+                    found.push((partition.to_string(), skyward_root::rooted::of_partition(by_name, partition, slot)));
+                }
+            }
+            self.state.root_images = Some(found);
+        }
         self.height = 0.0;
         self.fling = None;
         self.glide = None;
@@ -4733,7 +5452,8 @@ impl App {
             return;
         }
         self.end_turn();
-        let Some(view) = self.shown.take() else { return };
+        let Some(view) = self.shown.take() else { return;
+        };
         let mut left = self.backdrop.take().unwrap_or_else(|| Canvas::new(self.w, self.h));
         // The `<` comes up with the finger, before its page goes.
         let view = View { pressing: None, ..view };
@@ -4784,10 +5504,10 @@ impl App {
     /// and in a place, until it reaches the place's top.
     fn back(&mut self, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
-        if self.stack.len() <= 1 {
+        if !self.can_go_back() {
             return fx;
         }
-        let morph = self.screen() == Screen::Search && self.stack[self.stack.len() - 2].0 == Screen::Home;
+        let morph = !self.tablet_mode && self.screen() == Screen::Search && self.stack[self.stack.len() - 2].0 == Screen::Home;
         if morph {
             self.start_morph(false, now);
         }
@@ -4818,6 +5538,18 @@ impl App {
                     return vec![Effect::ReadPlace(place, up)];
                 }
             }
+            // Going back from the images of a package returns to where they
+            // were asked for, not through the folder that held it: the
+            // install page, or the image file page.
+            Screen::PackageImages => {
+                let back_to = match self.state.package_mode {
+                    Some(PackageMode::Flash) => Screen::Installing,
+                    _ => Screen::RootImages,
+                };
+                while self.stack.len() > 2 && self.stack[self.stack.len() - 2].0 != back_to {
+                    self.stack.pop();
+                }
+            }
             Screen::FileInfo => {
                 self.state.file = None;
                 self.state.asking_delete = false;
@@ -4828,7 +5560,9 @@ impl App {
                 let changed = self.state.editor.as_ref().expect("the editor page shows a file").changed;
                 if changed && self.unsaved_warned.is_none_or(|at| now >= at + TOAST_MS) {
                     self.unsaved_warned = Some(now);
-                    self.say(l.pick(["修改尚未保存，再次返回将放弃修改", "修改尚未儲存，再次返回將捨棄修改", "Changes aren't saved. Go back again to discard them"]), now);
+                    self.say(l.pick(["修改尚未保存，再次返回将放弃修改", "修改尚未儲存，再次返回將捨棄修改", "Changes aren't saved. Go back again to discard them",
+                        ]), now,
+                    );
                     return fx;
                 }
                 self.state.editor = None;
@@ -5033,7 +5767,9 @@ impl App {
                 _ => {}
             },
             Event::Reflashed(reflash) => self.state.reflash = Some(reflash),
-            Event::Wipe | Event::Reboot(_) => unreachable!("the runtime carries out what rescue asks of it"),
+            Event::Wipe | Event::Reboot(_) => {
+                unreachable!("the runtime carries out what rescue asks of it")
+            }
             Event::Done(outcome) | Event::Finished(outcome) => {
                 let damage = match (&outcome, &*install) {
                     (Outcome::Failed(_), Install::Updating { overwriting: true, .. }) => Some(Damage::System),
@@ -5067,7 +5803,9 @@ impl App {
             Screen::Systems => vec![Effect::ReadSystems],
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
-            Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],
+            Screen::Choose(place) if self.state.place_open(place) => {
+                vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())]
+            }
             Screen::Search => {
                 self.state.search.clear();
                 self.state.layer = Layer::Letters;
@@ -5098,7 +5836,9 @@ impl App {
                 self.state.skyward_check = SkywardCheck::Asking;
                 vec![Effect::CheckSkyward]
             }
-            Screen::Wlan if self.state.wlan.as_ref().is_some_and(|w| w.power == Power::On) => vec![Effect::ScanWlan],
+            Screen::Wlan if self.state.wlan.as_ref().is_some_and(|w| w.power == Power::On) => {
+                vec![Effect::ScanWlan]
+            }
             _ => Vec::new(),
         }
     }
@@ -5123,7 +5863,7 @@ impl App {
         let l = self.state.lang;
         match action {
             Action::Open(s) => {
-                if s == Screen::Search && self.screen() == Screen::Home {
+                if !self.tablet_mode && s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
                     // page easing there for the keys gets there at once.
                     if let Some((rest, _)) = self.seek.take() {
@@ -5163,14 +5903,198 @@ impl App {
                 self.refresh();
                 return vec![Effect::Wlan(on)];
             }
+            // A module is a directory: turning it off writes a file into it,
+            // and turning it back on takes that file away.
+            Action::OpenModule(at) => {
+                self.state.module = Some(at);
+                self.open(Screen::ModuleInfo);
+            }
+            Action::RemoveModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::uninstall(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::RestoreModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::restore(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::DownloadManager(at) => {
+                if !self.state.data.storage_open() {
+                    self.open(Screen::Decrypt);
+                    return self.arrive_at(Screen::Decrypt);
+                }
+                if !self.state.online() {
+                    self.open(Screen::Wlan);
+                    return self.arrive_at(Screen::Wlan);
+                }
+                if !self.state.downloading() {
+                    self.state.download = Some(DownloadJob { progress: None, rate: 0, outcome: None, stopping: false });
+                    self.refresh();
+                    return vec![Effect::DownloadManager(at)];
+                }
+            }
+            Action::OpenPatchImage => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Image);
+                // The folder opens at the top of internal storage, holding
+                // nothing yet: what it showed before belongs to another path.
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenDirect => {
+                self.open(Screen::RootDirect);
+                return Vec::new();
+            }
+            Action::RootPackage(at) => {
+                if let Some(path) = skyward_root::releases::downloaded().get(at) {
+                    let source = RootSource::Apk(path.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Storage, source);
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::OpenSystemPackage => {
+                // The page the install page picks from, with the packages
+                // alone listed: what a patch takes out of one comes back here.
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Package);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenPackageParts => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Parts);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::PickPackageImage(at) => {
+                // One image is taken out at a time: another tap while one is
+                // under way would start a second thread over the same file.
+                if crate::app::taking().is_some() {
+                    return Vec::new();
+                }
+                let listed = self.state.package_list.clone().unwrap_or_default();
+                let Some((name, _)) = listed.get(at).cloned() else { return Vec::new() };
+                self.state.package_said = None;
+                self.state.pending_flash = None;
+                self.package_take(&name);
+            }
+            Action::FlashTaken => {
+                if let Some(path) = self.state.pending_flash.take() {
+                    return vec![Effect::InstallPath(path)];
+                }
+            }
+            Action::OpenProxy => {
+                self.state.proxy_text = skyward_net::http::proxy().unwrap_or_default();
+                self.open(Screen::Proxy);
+                return Vec::new();
+            }
+            Action::OpenPackages => {
+                // The page the install page picks from, and its folder: one
+                // place for both, so it works as that one does.
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Manager);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                // The page asks for what the folder holds: the read alone,
+                // as opening the page otherwise does more than a place needs.
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::Toggle(Switch::RootManager(at)) => {
+                let found = skyward_root::installed::installed().unwrap_or_default();
+                if let Some(app) = found.get(at) {
+                    let source = RootSource::Apk(app.apk.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Installed, source);
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickVariant(at)) => {
+                self.state.root_variant = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickProxy(at)) => {
+                self.state.root_proxy = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickTier(at)) => {
+                self.state.root_tier = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::RootPartition(at)) => {
+                let partitions = root_partitions();
+                if let Some(name) = partitions.get(at).copied() {
+                    self.state.root_partition = Some(name);
+                    self.state.root_image = RootImage::Partition;
+                    self.state.root_image_way = ImageWay::Direct;
+                    self.state.root_said = None;
+                    // Back to the root page rather than over it, so choosing
+                    // a partition leaves no page behind.
+                    self.back_to_root();
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::RootSource(0)) => {
+                self.root_manager_chosen(ManagerWay::LastUsed, RootSource::Installed);
+                return Vec::new();
+            }
+            Action::Toggle(Switch::RootSource(_)) => self.refresh(),
+            Action::Toggle(Switch::Module(at)) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let (id, on) = (module.id.clone(), !module.enabled);
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::set_enabled(dir, &id, on);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::Keep(place)) => {
+                // The page lists what the phone has; the name is read from the
+                // same list rather than carried in the action.
+                let parts = skyward_root::partitions::here();
+                if let Some(name) = parts.get(place) {
+                    let kept = &mut self.state.keep_partitions;
+                    match kept.iter().position(|one| one == name) {
+                        Some(at) => {
+                            kept.remove(at);
+                        }
+                        None => kept.push(name.clone()),
+                    }
+                }
+                self.refresh();
+            }
             Action::Toggle(switch) => {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
+                    Switch::AutoRotate => &mut self.state.auto_rotate,
                     Switch::FileTransfer => &mut self.state.file_transfer,
                     Switch::Compress => &mut self.state.compress,
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
+                    Switch::KeepRoot => &mut self.state.keep_root,
+                    Switch::Keep(_)
+                    | Switch::Module(_)
+                    | Switch::RootPartition(_)
+                    | Switch::RootSource(_)
+                    | Switch::PickVariant(_)
+                    | Switch::PickTier(_)
+                    | Switch::PickProxy(_)
+                    | Switch::RootManager(_)
+                    => {
+                        unreachable!("kept by the page of their own")
+                    }
                     Switch::ShowPassword => &mut self.state.show_password,
                     Switch::Wlan => unreachable!("the WLAN switch is turned above"),
                 };
@@ -5211,7 +6135,9 @@ impl App {
                 }
                 self.refresh();
             }
-            Action::Confirm(_) => self.say(l.pick(["请按住圆形按钮向右滑动", "請按住圓形按鈕向右滑動", "Hold the round button and slide it right"]), now),
+            Action::Confirm(_) => {
+                self.say(l.pick(["请按住圆形按钮向右滑动", "請按住圓形按鈕向右滑動", "Hold the round button and slide it right"]), now)
+            }
             Action::Slider(_) | Action::Pattern => {}
             Action::Sideload => match self.state.install {
                 Install::Idle | Install::Finished { .. } => {
@@ -5272,7 +6198,8 @@ impl App {
                 let (path, folder) = (std::path::Path::new(&clip.path), std::path::Path::new(&self.state.files.path));
                 let name = path.file_name().map_or_else(|| clip.path.clone(), |n| n.to_string_lossy().into_owned());
                 if folder.starts_with(path) {
-                    self.say(&tr!(l, "无法将\"{name}\"放入其自身中", "無法將「{name}」放入其本身中", "“{name}” can't go inside itself"), now);
+                    self.say(&tr!(l, "无法将\"{name}\"放入其自身中", "無法將「{name}」放入其本身中", "“{name}” can't go inside itself"), now,
+                    );
                 } else if clip.op == FileOp::Move && path.parent() == Some(folder) {
                     self.say(&tr!(l, "\"{name}\"已在该文件夹中", "「{name}」已在這個資料夾中", "“{name}” is already in this folder"), now);
                 } else {
@@ -5431,7 +6358,8 @@ impl App {
                 self.refresh_text();
             }
             Action::TermKey(key) => {
-                let Some(term) = self.term.as_mut() else { return Vec::new() };
+                let Some(term) = self.term.as_mut() else { return Vec::new();
+                };
                 let bytes = term.key(key);
                 let running = term.running;
                 self.refresh();
@@ -5480,17 +6408,45 @@ impl App {
             }
             Action::ChooseEntry(i) => {
                 let screen = self.screen();
-                let Screen::Choose(place) = screen else { unreachable!("only a place's folder is chosen in") };
+                let place = match screen {
+                    Screen::Choose(place) => place,
+                    _ => unreachable!("only a place's folder is chosen in"),
+                };
                 let folder = self.state.folder(screen);
-                let entry = folder.entry(i).clone();
+                // A list read anew since it was drawn holds no such row: the
+                // one touched is gone, and nothing is chosen.
+                let Some(entry) = folder.entries.as_ref().ok().and_then(|entries| entries.get(i)).cloned() else {
+                    return Vec::new();
+                };
                 let path = folder.inside(&entry.name);
+                // What a page of the root's own picks: the same folder, told
+                // apart by what the page that opened it is for.
+                if let Some(pick) = self.state.root_pick {
+                    if matches!(entry.kind, FileKind::File | FileKind::Link { folder: false, .. }) {
+                        let top = match place {
+                            Place::Storage => "/sdcard",
+                            Place::UsbDrive => USB_DRIVE,
+                        };
+                        let at = format!("{top}/{path}");
+                        self.state.root_pick = None;
+                        match pick {
+                            RootPick::Manager => self.root_manager_chosen(ManagerWay::Storage, RootSource::Apk(at)),
+                            RootPick::Image => self.root_image_chosen(ImageWay::File, RootImage::File(at)),
+                            RootPick::Package => self.package_chosen(&at),
+                            RootPick::Parts => self.package_parts_chosen(&at),
+                        }
+                        return Vec::new();
+                    }
+                }
                 match entry.kind {
                     FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => {
                         let scroll = self.top().1;
                         self.state.folder_mut(screen).leave(scroll);
                         return vec![Effect::ReadPlace(place, path)];
                     }
-                    FileKind::File | FileKind::Link { folder: false, .. } => return self.install_file(place, path, entry.size, now),
+                    FileKind::File | FileKind::Link { folder: false, .. } => {
+                        return self.install_file(place, path, entry.size, now);
+                    }
                     FileKind::Special => unreachable!("a place lists no special files"),
                 }
             }
@@ -5506,16 +6462,34 @@ impl App {
             Action::JoinNetwork(i) => {
                 let w = self.state.wlan.as_ref().expect("networks show on a phone whose WLAN is brought up");
                 // A scan may have changed the list since the page was drawn.
-                let Some(network) = w.networks.get(i).cloned() else { return Vec::new() };
+                let Some(network) = w.networks.get(i).cloned() else { return Vec::new();
+                };
                 if w.joined.as_ref().is_some_and(|j| j.ssid == network.ssid) {
                     return self.act(Action::OpenJoined, now);
                 }
                 match network.security {
-                    Security::Wep => self.say(l.pick(["暂不支持 WEP 加密的网络", "尚不支援 WEP 加密的網路", "WEP networks aren't supported"]), now),
-                    Security::Enterprise => {
-                        self.say(l.pick(["暂不支持需要账号登录的网络", "尚不支援需要帳號登入的網路", "Networks that need an account sign-in aren't supported"]), now)
+                    Security::Wep => {
+                        self.say(l.pick(["暂不支持 WEP 加密的网络", "尚不支援 WEP 加密的網路", "WEP networks aren't supported"]), now)
                     }
-                    s if s.password() => self.ask_password(network),
+                    // A key the phone already keeps for the network is the
+                    // one it joins with: nothing to type.
+                    s if s.password() => match skyward_net::wlan::known().into_iter().find(|k| k.ssid == network.ssid) {
+                        Some(known) => {
+                            self.state.saved_try = Some(network.clone());
+                            return vec![Effect::JoinWlan {
+                                ssid: network.ssid,
+                                name: network.name,
+                                security: network.security,
+                                password: Secret(known.key),
+                            }]
+                        }
+                        None => self.ask_password(network),
+                    },
+                    Security::Enterprise => self.say(
+                        l.pick(["暂不支持需要账号登录的网络", "尚不支援需要帳號登入的網路", "Networks that need an account sign-in aren't supported"]),
+                        now,
+                    ),
+
                     _ => {
                         return vec![Effect::JoinWlan {
                             ssid: network.ssid,
@@ -5528,13 +6502,15 @@ impl App {
             }
             Action::NetworkDetails(i) => {
                 let w = self.state.wlan.as_ref().expect("networks show on a phone whose WLAN is brought up");
-                let Some(network) = w.networks.get(i).cloned() else { return Vec::new() };
+                let Some(network) = w.networks.get(i).cloned() else { return Vec::new();
+                };
                 self.state.details = Some(network);
                 self.open(Screen::WlanNetwork);
             }
             Action::OpenJoined => {
                 let w = self.state.wlan.as_ref().expect("a network is chosen on a phone whose WLAN is brought up");
-                let Some(j) = w.joined.clone() else { return Vec::new() };
+                let Some(j) = w.joined.clone() else { return Vec::new();
+                };
                 // As found, where it still is; as it was chosen otherwise.
                 let found = w.networks.iter().find(|n| n.ssid == j.ssid).cloned();
                 let network = found.unwrap_or(Network {
@@ -5688,6 +6664,7 @@ impl App {
             Screen::Decrypt => &mut self.state.code,
             Screen::Rename => &mut self.state.new_name,
             Screen::WlanPassword => &mut self.state.password,
+            Screen::Proxy => &mut self.state.proxy_text,
             Screen::WlanAdd => {
                 let a = self.state.adding.as_mut().expect("the page adds a network");
                 match a.field {
@@ -5751,7 +6728,8 @@ impl App {
             self.state.layer = Layer::Letters;
         }
         self.refresh();
-        let Some(term) = self.term.as_mut() else { return Vec::new() };
+        let Some(term) = self.term.as_mut() else { return Vec::new();
+        };
         if !term.running {
             return if cap == Cap::Enter { vec![Effect::StartShell(self.shell_folder.clone())] } else { Vec::new() };
         }
@@ -5872,11 +6850,13 @@ impl App {
             Cap::Show(layer) => self.state.layer = layer,
             Cap::Enter => match self.screen() {
                 Screen::Search => {
-                    if let Some(first) = search::find_on(&self.state.search, l, |screen| self.state.offers(screen)).first() {
+                    if let Some(first) = search::find_available(&self.state.search, l, |screen| self.state.offers(screen), self.state.supports_vibration).first() {
                         return self.act(Action::Open(first.screen), now);
                     }
                 }
-                Screen::Decrypt if self.state.code.is_empty() => self.say(l.pick(["请输入锁屏密码", "請輸入螢幕鎖定密碼", "Enter the screen lock"]), now),
+                Screen::Decrypt if self.state.code.is_empty() => {
+                    self.say(l.pick(["请输入锁屏密码", "請輸入螢幕鎖定密碼", "Enter the screen lock"]), now)
+                }
                 Screen::Decrypt => {
                     let code = std::mem::take(&mut self.state.code);
                     return self.unlock(code);
@@ -5889,8 +6869,12 @@ impl App {
                     let taken = self.state.files.entries.as_ref().is_ok_and(|entries| entries.iter().any(|e| e.name == name));
                     match name.as_str() {
                         "" => self.say(l.pick(["请输入名称", "請輸入名稱", "Enter a name"]), now),
-                        "." | ".." => self.say(l.pick(["名称不能为\".\"或\"..\"", "名稱不能是「.」或「..」", "A name can't be “.” or “..”"]), now),
-                        _ if name.contains('/') => self.say(l.pick(["名称不能包含\"/\"", "名稱不能包含「/」", "A name can't hold “/”"]), now),
+                        "." | ".." => {
+                            self.say(l.pick(["名称不能为\".\"或\"..\"", "名稱不能是「.」或「..」", "A name can't be “.” or “..”"]), now)
+                        }
+                        _ if name.contains('/') => {
+                            self.say(l.pick(["名称不能包含\"/\"", "名稱不能包含「/」", "A name can't hold “/”"]), now)
+                        }
                         _ if name == *current => return self.back(now),
                         _ if taken => self.say_taken(now),
                         _ => return vec![Effect::Rename { path: self.entry_path(), name }],
@@ -5899,6 +6883,18 @@ impl App {
                 // A password the network's protection cannot take is turned
                 // down here; one it can goes, and the WLAN page shows how
                 // joining goes.
+                // The proxy is taken as it is typed; an empty line leaves
+                // every request to go as it did before.
+                Screen::Proxy => {
+                    let text = self.state.proxy_text.trim().to_string();
+                    if !text.is_empty() && !text.contains(':') {
+                        self.say(l.pick(["代理写成「主机:端口」，例如 192.168.1.2:7890", "代理寫成「主機:連接埠」，例如 192.168.1.2:7890", "A proxy reads “host:port”, such as 192.168.1.2:7890"]), now);
+                    } else {
+                        let mut fx = self.back(now);
+                        fx.push(Effect::SetProxy(text));
+                        return fx;
+                    }
+                }
                 Screen::WlanPassword => {
                     let network = self.state.joining.clone().expect("the password page is for a network");
                     match refused(l, network.security, &self.state.password) {
@@ -5959,6 +6955,81 @@ impl App {
     }
 
     pub fn touch(&mut self, ev: Touch, f: &Fonts, now: u64) -> Vec<Effect> {
+        match ev {
+            Touch::Down(..) => self.touching = true,
+            Touch::Up => self.touching = false,
+            Touch::Move(..) => {},
+        }
+        if !self.display_on {
+            return Vec::new();
+        }
+        // Full-screen overlays consume touches before either tablet pane.
+        if self.charge_shown() {
+            if matches!(ev, Touch::Down(..)) {
+                self.dismiss_charging(now);
+                self.drag = Drag::Waking;
+                if let Some(tablet) = &mut self.tablet {
+                    tablet.cancel_gesture();
+                }
+            }
+            return Vec::new();
+        }
+        if let Some(mut tablet) = self.tablet.take() {
+            if matches!(ev, Touch::Down(..)) && self.just_woke(now) {
+                self.wake(now);
+                tablet.cancel_gesture();
+                self.tablet = Some(tablet);
+                return Vec::new();
+            }
+            let routed = tablet.route(ev);
+            let effects = match routed {
+                crate::tablet::Input::Detail(event) => self.touch_detail(event, f, now),
+                crate::tablet::Input::Select(screen) if self.display_on && !self.just_woke(now) => {
+                    self.stir(now);
+                    self.tablet_section(screen, now)
+                }
+                crate::tablet::Input::Select(_) => { self.wake(now); Vec::new() }
+                crate::tablet::Input::Sidebar => { self.stir(now); self.dirty = true; Vec::new() }
+            };
+            self.tablet = Some(tablet);
+            return effects;
+        }
+        self.touch_detail(ev, f, now)
+    }
+
+    fn tablet_section(&mut self, screen: Screen, now: u64) -> Vec<Effect> {
+        if self.screen() == screen { return Vec::new(); }
+        // Keep modal workflows and in-flight work on their existing pages.
+        if matches!(self.screen(), Screen::Editor | Screen::Installing | Screen::BackupJob | Screen::PartWork |
+            Screen::Erase | Screen::Relabel | Screen::SkywardUpdate | Screen::FileJob | Screen::CantStart |
+            Screen::Unhandled | Screen::Fastboot) || matches!(self.state.data, Data::Opening | Data::Locked { checking: true, .. }) {
+            self.say(self.state.lang.pick(["请先完成当前操作或返回", "請先完成目前操作或返回", "Finish this operation or go back first"]), now);
+            return Vec::new();
+        }
+        self.end_turn();
+        self.leave(false);
+        self.morph = None;
+        self.drag = Drag::Idle;
+        self.state.password.clear();
+        self.state.code.clear();
+        self.state.pattern.clear();
+        self.state.joining = None;
+        self.state.details = None;
+        self.state.clip = None;
+        self.state.adding = None;
+        self.state.mount_failure = None;
+        self.state.next_slot = None;
+        self.state.restore = None;
+        self.state.file = None;
+        self.state.asking_delete = false;
+        self.stack.truncate(1);
+        self.stack[0] = (Screen::Home, 0.0, Focus::Unset);
+        let effects = self.act(Action::Open(screen), now);
+        self.keys = false;
+        effects
+    }
+
+    fn touch_detail(&mut self, ev: Touch, f: &Fonts, now: u64) -> Vec<Effect> {
         // A finger on the dark panel lights nothing, as on the phone's own
         // system, where the power key lights it.
         if !self.display_on {
@@ -6011,7 +7082,7 @@ impl App {
                 };
                 // The first page has nothing to go back to: its edges are
                 // like the rest of it.
-                let at_edge = side.filter(|_| self.stack.len() > 1);
+                let at_edge = side.filter(|_| self.can_go_back());
                 // A swipe in from an edge goes back over whatever the page is
                 // doing: a finger landing there leaves a gliding or springing
                 // page alone until it drags the page, and presses nothing.
@@ -6064,7 +7135,9 @@ impl App {
                 // the finger lands on it, if the finger stays.
                 let row = hit
                     .filter(|&(a, r)| self.frame.as_ref().is_some_and(|fr| fr.hits.contains(&Hit { rect: r, action: a })))
-                    .filter(|&(a, r)| row_wide(&t, r) && !matches!(a, Action::Open(Screen::Search) | Action::Confirm(_) | Action::TypeInto(_)))
+                    .filter(|&(a, r)| {
+                        row_wide(&t, r) && !matches!(a, Action::Open(Screen::Search) | Action::Confirm(_) | Action::TypeInto(_))
+                    })
                     .map(|(_, r)| r);
                 self.drag = match hit {
                     Some((Action::Slider(which), track)) => {
@@ -6128,7 +7201,7 @@ impl App {
                     let ready = travel > m.dp(BACK_SWIPE_DP);
                     // A tap of the motor as the `<` appears, as the system
                     // gives.
-                    if ready && !armed && self.state.vibrate {
+                    if ready && !armed && self.state.supports_vibration && self.state.vibrate {
                         fx.push(Effect::Haptic);
                     }
                     self.drag = Drag::Edge { start, from_left, armed: ready, x, cy };
@@ -6215,7 +7288,7 @@ impl App {
                 Drag::Pattern => fx.extend(self.drawn(now)),
                 // Let go, the strength slider taps the motor as strongly as
                 // it was left at.
-                Drag::Slider(Slider::Vibration, _) if self.state.vibrate => fx.push(Effect::Haptic),
+                Drag::Slider(Slider::Vibration, _) if self.state.supports_vibration && self.state.vibrate => fx.push(Effect::Haptic),
                 _ => {}
             },
         }
@@ -6331,7 +7404,7 @@ impl App {
         self.stir(now);
         self.button = Some((key, Press::Spent));
         let mut fx = Vec::new();
-        if self.state.vibrate {
+        if self.state.supports_vibration && self.state.vibrate {
             fx.push(Effect::Haptic);
         }
         fx.push(Effect::Screenshot { storage: self.state.place_open(Place::Storage) });
@@ -6396,7 +7469,8 @@ impl App {
             Some((first, _)) if first == key => self.let_chord_go(now),
             _ => Vec::new(),
         };
-        let Some((down, press)) = self.button else { return fx };
+        let Some((down, press)) = self.button else { return fx;
+        };
         if down != key {
             return fx;
         }
@@ -6421,7 +7495,8 @@ impl App {
     /// Whatever the button held down was doing comes to nothing until it is
     /// let go: a knob it slid goes back.
     fn drop_button(&mut self) {
-        let Some((key, press)) = self.button else { return };
+        let Some((key, press)) = self.button else { return;
+        };
         if let Press::Slide { which, track, .. } = press {
             self.let_knob_go(which, track);
         }
@@ -6467,7 +7542,8 @@ impl App {
                 let refused = if !s.backup.contains(&true) {
                     Some(["请选择要备份的内容", "請選擇要備份的內容", "Choose what to back up"])
                 } else if s.backup[2] && s.data != Data::Open {
-                    Some(["备份 data 分区需先完成「解密」", "備份 data 分割區需先完成「解密」", "Decrypt before backing up the data partition"])
+                    Some(["备份 data 分区需先完成「解密」", "備份 data 分割區需先完成「解密」", "Decrypt before backing up the data partition",
+                    ])
                 } else if s.place_open(s.backup_to) {
                     None
                 } else {
@@ -6490,7 +7566,9 @@ impl App {
                 if !parts.contains(&true) {
                     self.say(l.pick(["请选择要恢复的内容", "請選擇要還原的內容", "Choose what to restore"]), now);
                 } else if parts[2] && self.state.data != Data::Open {
-                    self.say(l.pick(["恢复 data 分区需先完成「解密」", "還原 data 分割區需先完成「解密」", "Decrypt before restoring the data partition"]), now);
+                    self.say(l.pick(["恢复 data 分区需先完成「解密」", "還原 data 分割區需先完成「解密」", "Decrypt before restoring the data partition",
+                        ]), now,
+                    );
                 } else {
                     fx.push(restore);
                 }
@@ -6508,6 +7586,11 @@ impl App {
                 }
                 _ => self.say(l.pick(["无法读取启动槽位", "無法讀取啟動槽位", "Couldn't read the boot slots"]), now),
             },
+            Confirm::PatchRoot => {
+                self.state.root_said = None;
+                self.refresh();
+                fx.push(Effect::PatchRoot);
+            }
             Confirm::FactoryReset => fx.push(Effect::FactoryReset),
             Confirm::Merge => {
                 if self.state.update == Standing::Waiting {
@@ -6523,9 +7606,9 @@ impl App {
                 Data::Open | Data::Locked { .. } => fx.push(Effect::Relabel),
                 Data::Opening => self.say(l.pick(DATA_OPENING), now),
                 Data::Erased => self.say(l.pick(DATA_ERASED), now),
-                Data::Closed | Data::Failed(_) => {
-                    self.say(l.pick(["请先在「解密」中打开 data 分区", "請先在「解密」中開啟 data 分割區", "Open the data partition in Decrypt first"]), now)
-                }
+                Data::Closed | Data::Failed(_) => self.say(l.pick(["请先在「解密」中打开 data 分区", "請先在「解密」中開啟 data 分割區", "Open the data partition in Decrypt first",
+                    ]), now,
+                ),
             },
             // The data partition is reached through its own key whether or
             // not it is open, but not while it is being opened or erased.
@@ -6587,10 +7670,10 @@ impl App {
                 self.adjusting = !self.adjusting;
                 if self.adjusting {
                     let said = match which {
-                        Slider::Brightness => ["按音量键调节亮度，按电源键完成", "按音量鍵調整亮度，按電源鍵完成", "Set the brightness with the volume keys, then press the power key"],
-                        Slider::Vibration => {
-                            ["按音量键调节振动强度，按电源键完成", "按音量鍵調整震動強度，按電源鍵完成", "Set the vibration with the volume keys, then press the power key"]
-                        }
+                        Slider::Brightness => ["按音量键调节亮度，按电源键完成", "按音量鍵調整亮度，按電源鍵完成", "Set the brightness with the volume keys, then press the power key",
+                        ],
+                        Slider::Vibration => ["按音量键调节振动强度，按电源键完成", "按音量鍵調整震動強度，按電源鍵完成", "Set the vibration with the volume keys, then press the power key",
+                        ],
                     };
                     self.say(l.pick(said), now);
                 }
@@ -6600,7 +7683,9 @@ impl App {
             Stop::Dot(i) if self.state.pattern.last() == Some(&i) => self.drawn(now),
             Stop::Dot(i) => {
                 if self.state.pattern.is_empty() {
-                    self.say(l.pick(["连接完成后，在最后一个点上再按一次电源键", "連接完成後，在最後一個點上再按一次電源鍵", "When the pattern is done, press the power key again on its last dot"]), now);
+                    self.say(l.pick(["连接完成后，在最后一个点上再按一次电源键", "連接完成後，在最後一個點上再按一次電源鍵", "When the pattern is done, press the power key again on its last dot",
+                        ]), now,
+                    );
                 }
                 self.join(&self.theme(), i);
                 Vec::new()
@@ -6633,7 +7718,7 @@ impl App {
             if let Some(Spot { stop: Stop::Hit(Action::Slider(which)), rect, .. }) = self.lit() {
                 let level = self.level(which) + if down { -SLIDER_STEP } else { SLIDER_STEP };
                 self.set_level(&self.theme(), which, rect, level);
-                if which == Slider::Vibration && self.state.vibrate {
+                if which == Slider::Vibration && self.state.supports_vibration && self.state.vibrate {
                     return vec![Effect::Haptic];
                 }
             }
@@ -6707,7 +7792,9 @@ impl App {
             };
             match cur {
                 Some(i) if page(i) => (0..i).rev().find(|&k| page(k)).map_or_else(before, To::Spot),
-                Some(i) if docked(i) => (0..i).rev().find(|&k| docked(k)).or_else(|| (0..n).rev().find(|&k| from_bottom(k))).map_or_else(before, To::Spot),
+                Some(i) if docked(i) => {
+                    (0..i).rev().find(|&k| docked(k)).or_else(|| (0..n).rev().find(|&k| from_bottom(k))).map_or_else(before, To::Spot)
+                }
                 Some(i) => (0..i).rev().find(|&k| held(k)).map_or(if scroll > 0.0 { To::Scroll } else { To::Round }, To::Spot),
                 None => (0..n).rev().find(|&k| from_bottom(k)).map_or_else(before, To::Spot),
             }
@@ -6863,7 +7950,8 @@ impl App {
     /// A page come to rest with its search bar part folded eases on from
     /// there to fold the bar away or unfold it whole, whichever is nearer.
     fn settle_fold(&mut self, now: u64) {
-        let Some(fr) = self.frame.as_ref() else { return };
+        let Some(fr) = self.frame.as_ref() else { return;
+        };
         let at = self.top().1;
         let rest = fr.settle(at).min(self.max_scroll());
         if rest != at {
@@ -6963,7 +8051,7 @@ impl App {
             Slider::Brightness => &mut self.state.brightness,
             Slider::Vibration => &mut self.state.vibration,
         };
-        *value = level.clamp(if which == Slider::Brightness { MIN_BRIGHTNESS } else { 0.0 }, 1.0);
+        *value = level.clamp(if which == Slider::Brightness { self.minimum_brightness } else { 0.0 }, 1.0);
         let value = *value;
         if let Some(fr) = self.frame.as_mut() {
             fr.canvas.fill_rect(track.x, track.y, track.w, track.h, t.pal.card);
@@ -6991,7 +8079,8 @@ impl App {
 
     /// Add the dot under the finger to the pattern being drawn.
     fn trace(&mut self, t: &Theme, x: f32, y: f32) {
-        let Some((cx, cy, span)) = self.frame.as_ref().and_then(|fr| fr.pattern) else { return };
+        let Some((cx, cy, span)) = self.frame.as_ref().and_then(|fr| fr.pattern) else { return;
+        };
         let reach = t.m.dp(widgets::PATTERN_REACH_DP);
         let dots = widgets::pattern_dots(cx, cy, span);
         if let Some(i) = dots.iter().position(|&(dx, dy)| (dx - x).hypot(dy - y) < reach) {
@@ -7023,8 +8112,10 @@ impl App {
     }
 
     fn repaint_pattern(&mut self, t: &Theme) {
-        let Some(fr) = self.frame.as_mut() else { return };
-        let Some((cx, cy, span)) = fr.pattern else { return };
+        let Some(fr) = self.frame.as_mut() else { return;
+        };
+        let Some((cx, cy, span)) = fr.pattern else { return;
+        };
         let r = span / 2.0 + t.m.dp(16.0);
         fr.canvas.fill_rect(cx - r, cy - r, r * 2.0, r * 2.0, t.pal.bg);
         widgets::pattern_lock(&mut fr.canvas, t, cx, cy, span, &self.state.pattern);
@@ -7048,6 +8139,205 @@ mod tests {
     const H: u32 = 3200;
     const PPD: f32 = 3.5;
 
+    #[test]
+    fn tablet_rotation_can_compose_about_before_the_next_tick() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let (f, info) = (fonts(), info());
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        app.tick(1000);
+        let mut canvas = Canvas::new(3048, 2032);
+        app.compose(&mut canvas, &f, &info, "12:00", 1000);
+        for (w, h) in [(2032, 3048), (3048, 2032)] {
+            app.resize(w, h);
+            canvas = Canvas::new(w, h);
+            // The runtime needs this snapshot before it starts the turn animation.
+            app.compose(&mut canvas, &f, &info, "12:00", 1500);
+            assert_eq!(app.screen(), Screen::About);
+        }
+    }
+
+    #[test]
+    fn resizing_a_tablet_keeps_its_page_and_work_in_both_directions() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let mut app = App::new(Screen::Installing, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        app.state.code = "123456".into();
+        app.state.install = Install::Flashing { partition: "system", stage: None };
+        for (width, height) in [(2032, 3048), (3048, 2032), (2032, 3048)] {
+            app.resize(width, height);
+            assert!(app.tablet_mode);
+            assert_eq!(app.w, width - width / 3);
+            assert_eq!(app.h, height);
+            assert_eq!(app.screen(), Screen::Installing);
+            assert_eq!(app.state.code, "123456");
+            assert!(matches!(app.state.install, Install::Flashing { partition: "system", .. }));
+            app.resize(width, height);
+            assert_eq!(app.w, width - width / 3);
+        }
+    }
+
+    #[test]
+    fn rotation_waits_for_release_and_obeys_the_switch_and_fastboot() {
+        use crate::rotation::Rotation;
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        let f = fonts();
+        app.touch(Touch::Down(10.0,10.0), &f, 1000);
+        app.follow_rotation(Rotation::Right);
+        assert_eq!(app.rotation(), Rotation::Native);
+        app.touch(Touch::Up, &f, 1010);
+        app.follow_rotation(Rotation::Right);
+        assert_eq!(app.rotation(), Rotation::Right);
+        app.state.auto_rotate = false;
+        app.follow_rotation(Rotation::Left);
+        assert_eq!(app.rotation(), Rotation::Right, "off keeps the current direction");
+        app.state.auto_rotate = true;
+        app.sleep(2000);
+        assert!(!app.rotation_enabled());
+        app.follow_rotation(Rotation::Left);
+        assert_eq!(app.rotation(), Rotation::Right);
+        app.display_on = true;
+        app.stack.push((Screen::Fastboot, 0.0, Focus::Unset));
+        assert!(!app.rotation_enabled());
+        assert_eq!(app.rotation(), Rotation::Native);
+        app.follow_rotation(Rotation::Left);
+        assert_eq!(app.state.rotation, Rotation::Right);
+        app.stack.pop();
+        assert_eq!(app.rotation(), Rotation::Right);
+    }
+
+    #[test]
+    fn tablet_fastboot_stays_fullscreen_and_recovery_restores_the_sidebar() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let mut app = App::new(Screen::Fastboot, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        assert_eq!(app.w, 3048);
+        assert!(app.tablet.is_none());
+        assert!(!app.tablet_mode);
+        let f = fonts();
+        let i = info();
+        let mut canvas = Canvas::new(3048, 2032);
+        app.tick(1000);
+        app.compose(&mut canvas, &f, &i, "12:00", 1000);
+        app.enter_recovery();
+        app.configure_device(&cfg);
+        assert_eq!(app.w, 2032);
+        assert!(app.tablet.is_some());
+        assert!(app.tablet_mode);
+        assert_eq!(app.screen(), Screen::About);
+        app.tick(1100);
+        app.compose(&mut canvas, &f, &i, "12:00", 1100);
+    }
+
+    #[test]
+    fn tablet_navigation_stays_beside_details_and_hides_unsupported_vibration() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let f = fonts();
+        let i = info();
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.state.data = Data::Open;
+        app.configure_device(&cfg);
+        app.configure_device(&cfg);
+        assert_eq!(app.w, 2032, "configuration does not shrink the detail pane twice");
+        assert_eq!(app.screen(), Screen::About);
+        app.tick(0);
+        let mut canvas = Canvas::new(3048, 2032);
+        app.compose(&mut canvas, &f, &i, "12:00", 0);
+        let mut global = app.theme();
+        global.m.w = 3048;
+        let mut bar = Canvas::filled(3048, 100, global.pal.bg);
+        widgets::status_bar(&mut bar, &global, &f, &app.bar("12:00", &i), global.pal.status);
+        assert_eq!(canvas.crop(0, 0, 350, 100).data, bar.crop(0, 0, 350, 100).data,
+            "the time uses the left edge of the physical display");
+        let (x, y) = app.tablet.as_ref().unwrap().section_center(Screen::Settings);
+        app.touch(Touch::Down(x, y), &f, 1000);
+        app.touch(Touch::Up, &f, 1010);
+        assert_eq!(app.screen(), Screen::Settings);
+        assert_eq!(app.tablet_selection(), Screen::Settings);
+        let frame = app.frame(&f, &i);
+        assert!(!frame.back, "the section is selected from the fixed sidebar");
+        assert!(frame.hits.iter().all(|h| !matches!(h.action,
+            Action::Slider(Slider::Vibration) | Action::Toggle(Switch::Vibrate))));
+        let track = frame.hits.iter().find(|h| h.action == Action::Slider(Slider::Brightness)).unwrap().rect;
+        app.end_turn();
+        app.compose(&mut canvas, &f, &i, "12:00", 1100);
+        // Input coordinates include the sidebar offset; the original controls do not.
+        let x = 1016.0 + track.x;
+        let cy = track.y + track.h/2.0;
+        app.touch(Touch::Down(x, cy), &f, 1200);
+        app.touch(Touch::Up, &f, 1210);
+        assert!((app.state.brightness - 1.0/4095.0).abs() < 0.00001);
+        assert!(search::find_available("vibr", Lang::En, |_| true, app.state.supports_vibration).is_empty());
+        app.back(1300);
+        assert_eq!(app.screen(), Screen::Settings, "back cannot expose the phone home menu");
+        app.stack.push((Screen::Installing, 0.0, Focus::Unset));
+        app.state.install = Install::Flashing { partition: "recovery", stage: None };
+        assert!(app.tablet_section(Screen::Wipe, 1400).is_empty());
+        assert_eq!(app.screen(), Screen::Installing, "sidebar navigation cannot leave partition writes");
+    }
+
+    #[test]
+    fn a_sidebar_touch_cannot_wake_the_tablet_or_open_a_page_just_after_power_wakes_it() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        app.display_on = false;
+        let f = fonts();
+        app.touch(Touch::Down(150.0, 1700.0), &f, 1000);
+        assert!(!app.display_on, "only the power key wakes the dark panel");
+        app.touch(Touch::Up, &f, 5000);
+        press(&mut app, Key::Power, 6000);
+        assert!(app.display_on);
+        app.touch(Touch::Down(150.0, 1700.0), &f, 6010);
+        app.touch(Touch::Up, &f, 6020);
+        assert_eq!(app.screen(), Screen::About);
+    }
+
+    #[test]
+    fn tablet_screen_off_fade_covers_the_sidebar_and_detail() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        app.tick(0);
+        let mut canvas = Canvas::new(3048, 2032);
+        app.compose(&mut canvas, &f, &i, "12:00", 1000);
+        assert!(canvas.data.iter().any(|&v| v != 0));
+        press(&mut app, Key::Power, 1100);
+        app.tick(1465);
+        app.compose(&mut canvas, &f, &i, "12:00", 1465);
+        assert!(canvas.data.as_chunks::<4>().0.iter().all(|p| p[..3] == [0, 0, 0]),
+            "both panes and the full-width status bar fade to black");
+    }
+
+    #[test]
+    fn tablet_charging_covers_both_panes_and_dismisses_without_selecting_a_section() {
+        let cfg = skyward_config::DeviceConfig::parse(include_str!("../../../devices/sheng.toml")).unwrap();
+        let f = fonts();
+        let i = DeviceInfo { battery: Some(battery_at(64, Charge::Charging)), ..info() };
+        let mut app = App::new(Screen::Home, 3048, 2032, 2.5);
+        app.configure_device(&cfg);
+        app.tick(0);
+        let mut canvas = Canvas::new(3048, 2032);
+        app.compose(&mut canvas, &f, &i, "12:00", 1000);
+        assert!(app.dither.is_some(), "the About page has a detail-width dither");
+        let (x, y) = app.tablet.as_ref().unwrap().section_center(Screen::Settings);
+        app.plugged(1100, true);
+        app.tick(2000);
+        app.compose(&mut canvas, &f, &i, "12:00", 2000);
+        let center_foot = ((canvas.h - 4) * canvas.w + canvas.w / 2) as usize * 4;
+        assert!(canvas.data[center_foot + 2] > 40, "charging art spans the physical display");
+        app.touch(Touch::Down(x, y), &f, 2010);
+        app.touch(Touch::Up, &f, 2020);
+        assert!(!app.charge_shown());
+        assert_eq!(app.screen(), Screen::About, "dismissing the overlay does not press the sidebar beneath");
+        app.tick(2400);
+        app.compose(&mut canvas, &f, &i, "12:00", 2400);
+        assert_eq!(app.w, 2032, "the detail pane keeps its own width after charging");
+    }
+
     fn fonts() -> Fonts {
         crate::font::bundled()
     }
@@ -7061,6 +8351,7 @@ mod tests {
             ram_kib: 15_556_972,
             panel: Some((W, H)),
             screen: Some(6.73),
+            battery_capacity_mah: None,
             os_version: None,
             android: None,
             locale: None,
@@ -7411,9 +8702,7 @@ mod tests {
         // The bar's top along a column through it, clear of the title and
         // the placeholder: the first row in the field's grey.
         let x = m.dp(300.0) as u32;
-        let top = |screen: &Canvas| {
-            (m.dp(40.0) as u32..H).find(|&y| screen.data[((y * W + x) * 4) as usize] == t.pal.search.r).map(|y| y as f32)
-        };
+        let top = |screen: &Canvas| (m.dp(40.0) as u32..H).find(|&y| screen.data[((y * W + x) * 4) as usize] == t.pal.search.r).map(|y| y as f32);
         let grey = |screen: &Canvas, y: f32| screen.data[((y as u32 * W + W / 2) * 4) as usize];
         let (home, field) = (m.content_top, widgets::search_layout(&t).0.y);
         // The device card under the home page's bar.
@@ -8451,7 +9740,7 @@ mod tests {
         assert_eq!(app.frame(&f, &i).title, "語言");
         tap_back(&mut app, &f, &i, 0);
         app.tick(1000);
-        assert_eq!((app.screen(), app.frame(&f, &i).title), (Screen::Settings, "設定"), "and so does the page gone back to");
+        assert_eq!((app.screen(), app.frame(&f, &i).title.to_string()), (Screen::Settings, "設定".to_string()), "and so does the page gone back to");
         app.set_mounts(Ok(vec![MountRow { base: "odm".into(), point: "/odm".into(), mounted: true, holders: vec!["qseecomd".into()] }]));
         tap(&mut app, &f, &i, Action::Open(Screen::Language));
         tap(&mut app, &f, &i, Action::Language(Lang::En));
@@ -10630,11 +11919,13 @@ mod tests {
         assert!(app.act(Action::Open(Screen::Wlan), 0).is_empty(), "a WLAN that is off is not scanned");
         assert_eq!(tap(&mut app, &f, &i, Action::Toggle(Switch::Wlan)), vec![Effect::Wlan(true)]);
         assert_eq!(app.state.wlan.as_ref().unwrap().power, Power::Starting, "the switch moves at once");
-        let nearby = vec![network("Skyward", -34, Security::Psk), network("Skyward-Open", -72, Security::Open), network("Skyward-WEP", -60, Security::Wep)];
+        let nearby = vec![network("Skyward", -34, Security::Psk), network("Skyward-Open", -72, Security::Open), network("Skyward-WEP", -60, Security::Wep),
+        ];
         app.set_wlan(Wlan { power: Power::On, networks: nearby, joined: None });
         tap(&mut app, &f, &i, Action::JoinNetwork(2));
         assert_eq!(toast(&app), Some("暂不支持 WEP 加密的网络"));
-        let cafe = Effect::JoinWlan { ssid: b"Skyward-Open".to_vec(), name: "Skyward-Open".into(), security: Security::Open, password: Secret::default() };
+        let cafe = Effect::JoinWlan { ssid: b"Skyward-Open".to_vec(), name: "Skyward-Open".into(), security: Security::Open, password: Secret::default(),
+        };
         assert_eq!(tap(&mut app, &f, &i, Action::JoinNetwork(1)), vec![cafe], "an open network is joined at once");
         tap(&mut app, &f, &i, Action::JoinNetwork(0));
         assert_eq!(app.screen(), Screen::WlanPassword);
@@ -10649,7 +11940,8 @@ mod tests {
         tap(&mut app, &f, &i, Action::Type(Cap::Show(Layer::Digits)));
         type_in(&mut app, "12");
         let fx = tap(&mut app, &f, &i, Action::Type(Cap::Enter));
-        let join = Effect::JoinWlan { ssid: b"Skyward".to_vec(), name: "Skyward".into(), security: Security::Psk, password: Secret("secret12".into()) };
+        let join = Effect::JoinWlan { ssid: b"Skyward".to_vec(), name: "Skyward".into(), security: Security::Psk, password: Secret("secret12".into()),
+        };
         assert_eq!(format!("{join:?}"), r#"JoinWlan { ssid: [83, 107, 121, 119, 97, 114, 100], name: "Skyward", security: Psk, password: Secret(8 characters) }"#, "what is printed leaves the password out");
         assert_eq!(fx, vec![join]);
         assert_eq!(app.screen(), Screen::Wlan, "the WLAN page shows how joining goes");
@@ -10748,7 +12040,8 @@ mod tests {
         tap(&mut app, &f, &i, Action::Type(Cap::Show(Layer::Digits)));
         type_in(&mut app, "12");
         let fx = tap(&mut app, &f, &i, Action::Type(Cap::Enter));
-        let join = Effect::JoinWlan { ssid: b"skyward".to_vec(), name: "skyward".into(), security: Security::Psk, password: Secret("secret12".into()) };
+        let join = Effect::JoinWlan { ssid: b"skyward".to_vec(), name: "skyward".into(), security: Security::Psk, password: Secret("secret12".into()),
+        };
         assert_eq!(fx, vec![join]);
         assert_eq!(app.screen(), Screen::Wlan, "the WLAN page shows how joining goes");
         assert_eq!((app.state.adding.as_ref(), app.state.password.as_str()), (None, ""), "nothing typed is kept");
@@ -11080,7 +12373,7 @@ mod tests {
         app.compose(&mut c, &f, &i, "12:00", 0);
         app.file_job_ended(JobEnd::Stopped, 0);
         app.compose(&mut c, &f, &i, "12:00", 16);
-        assert_eq!(app.titles.as_ref().map(|((title, _), _, _)| *title), Some("复制未完成"));
+        assert_eq!(app.titles.as_ref().map(|((title, _), _, _)| title.clone()), Some("复制未完成".to_string()));
     }
 
     #[test]
