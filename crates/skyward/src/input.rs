@@ -283,11 +283,14 @@ impl Inputs {
     /// Tell the touchscreen again what its panel takes, as taking it in did:
     /// a driver that slept with the panel is woken by the same words.
     pub fn rearm(&mut self) -> Result<()> {
+        let mut told = Vec::new();
         for w in &self.touch.writes {
-            if let Err(e) = fs::write(&w.path, &w.value) {
-                eprintln!("arm {} with {}: {e}", w.path, w.value);
+            match fs::write(&w.path, &w.value) {
+                Ok(()) => told.push(format!("{}={}", w.path, w.value)),
+                Err(e) => eprintln!("arm {} with {}: {e}", w.path, w.value),
             }
         }
+        skyward_sys::kmsg(&format!("touchscreen told again: {}", told.join(" ")))?;
         Ok(())
     }
 
