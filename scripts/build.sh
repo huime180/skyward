@@ -21,13 +21,16 @@ cargo build --locked --release -p skyward-pack
 rm -rf tools stock out
 mkdir -p tools stock out
 cp target/aarch64-linux-android/release/skyward tools/
-cp target/system-init/aarch64-linux-android/release/skyward-system-init tools/system-init
+cp target/system-init/aarch64-linux-android/release/system-init tools/system-init
 cp target/release/skyward-pack tools/
 
 chmod +x tools/skyward tools/skyward-pack
 
 version="$(git rev-parse --short=7 HEAD)"
-stock="$(tools/skyward-pack stock --config "devices/$device.toml" | tee /dev/stderr | sed -n 's/^version=//p')"
+# What the stock build is called, read before the partition is taken out: the
+# read alone asks the package's server for its directory.
+stock="$(tools/skyward-pack stock --config "devices/$device.toml" | sed -n 's/^version=//p')"
+[ -n "$stock" ] || { echo "the packer named no stock version for $device" >&2; exit 1; }
 tools/skyward-pack stock --config "devices/$device.toml" --out stock/recovery.img
 
 tools/skyward-pack recovery --stock stock/recovery.img --binary tools/skyward --system-init tools/system-init \
