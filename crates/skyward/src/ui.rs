@@ -1818,7 +1818,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 shown = true;
             }
             if blanked {
-            if blanked {
                 // The panel is lit again: the touchscreen is taken in
                 // afresh, so a driver that slept with the panel reports
                 // again.
@@ -1826,7 +1825,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             }
             blanked = false;
         } else if !blanked {
-            // so a driver that sleeps with the panel keeps reporting.
+            // The touchscreen is told what it is told when it is taken
+            // in, as the panel goes dark.
             inputs.rearm()?;
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
