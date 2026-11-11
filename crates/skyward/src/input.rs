@@ -233,6 +233,13 @@ impl Inputs {
     /// power, volume or back key as buttons. A panel taken in is told what
     /// the device description writes to the touchscreen.
     fn scan(&mut self) -> Result<()> {
+        if let Some(panel) = &self.panel {
+            if !panel.path.exists() {
+                eprintln!("input {}: gone", panel.path.display());
+                self.seen.remove(&panel.path);
+                self.panel = None;
+            }
+        }
         for (path, dev) in evdev::raw_stream::enumerate() {
             if !self.seen.insert(path.clone()) {
                 continue;
@@ -326,6 +333,10 @@ impl Inputs {
                     eprintln!("input {}: removed", panel.path.display());
                     self.seen.remove(&panel.path);
                     self.panel = None;
+                    // The driver that slept may have made the device again
+                    // under another name: take it in now, not on the next
+                    // change under /dev/input, which may never come.
+                    self.scan()?;
                 }
                 Err(e) => return Err(e).context("read touch events"),
             }
