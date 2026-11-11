@@ -1676,7 +1676,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     app.state.wlan = cfg.wlan.as_ref().map(|_| Wlan::default());
     let mut wlan = if fastboot { None } else { start_wlan(cfg, &servers)? };
     if let Some(w) = &wlan {
-        w.send(wlan::Command::On)?;
+        w.send(wlan::Command::On);
     }
     let mut scanned_at = Instant::now();
     app.state.update_server = cfg.update.is_some();
