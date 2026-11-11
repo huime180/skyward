@@ -2089,7 +2089,7 @@ impl Default for State {
         root_said: None,
         root_variant: 0,
         root_tier: 0,
-        root_proxy: 0,
+        root_proxy: 1,
         root_partition: None,
         root_image: RootImage::Partition,
         root_pick: None,
