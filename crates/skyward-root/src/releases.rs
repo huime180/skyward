@@ -64,6 +64,11 @@ pub fn latest(variant: Variant) -> String {
     format!("https://api.github.com/repos/{}/releases/latest", variant.repo())
 }
 
+/// The way to nightly.link a phone here reaches through: the builds a
+/// workflow made are handed out there, and the way to GitHub itself carries
+/// no nightly.link address.
+pub const DEV_PROXY: &str = "https://proxy.huime.top/";
+
 /// Where the package the newest run of `variant`'s manager workflow built is
 /// fetched from: nightly.link hands out what a workflow built, without a
 /// token, which is the only way to a manager that publishes no release.
@@ -78,7 +83,7 @@ pub fn nightly(variant: Variant) -> String {
         Variant::SukiSu => ("build-manager.yml", "Manager.zip"),
         Variant::BakaSu => ("build-manager.yml", "Manager-release.zip"),
     };
-    format!("https://nightly.link/{}/workflows/{workflow}/main/{package}", variant.repo())
+    format!("{DEV_PROXY}https://nightly.link/{}/workflows/{workflow}/main/{package}", variant.repo())
 }
 
 impl Variant {
