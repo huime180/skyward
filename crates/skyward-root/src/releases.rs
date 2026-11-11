@@ -47,8 +47,8 @@ pub fn downloaded() -> Vec<std::path::PathBuf> {
 pub const MIRRORS: [(&str, &str); 4] = [
     ("直连", ""),
     ("gh-proxy.com", "https://gh-proxy.com/"),
-    ("ghproxy.homeboyc.cn", "https://ghproxy.homeboyc.cn/"),
-    ("github.akams.cn", "https://github.akams.cn/"),
+    ("ghfast.top", "https://ghfast.top/"),
+    ("gh-proxy.net", "https://gh-proxy.net/"),
 ];
 
 /// `url` reached through `mirror`, or as it is where there is none.

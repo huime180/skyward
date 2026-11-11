@@ -1007,6 +1007,12 @@ fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPla
     // through one it does not reach through another.
     // A build a workflow made takes only the way that carries any address:
     // the other mirrors reach GitHub's own files alone.
+    // A build a workflow made is on GitHub itself alone: the ways that carry
+    // an address carry a release file, not this.
+    let proxy = match tier {
+        Tier::Dev => 0,
+        Tier::Stable => proxy,
+    };
     let mirror = releases::MIRRORS.get(proxy).map(|(_, url)| *url).unwrap_or("");
     match (tier, releases::has_releases(variant)) {
         // The newest release carries the package of the stable tier, where

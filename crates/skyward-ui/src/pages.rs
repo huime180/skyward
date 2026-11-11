@@ -4002,7 +4002,9 @@ pub fn root_download(cx: &Ctx) -> Frame {
     // to GitHub that carries any address carries: the phone owner's own.
     let all = skyward_root::releases::MIRRORS;
     let ways: &[(&str, &str)] = match tier {
-        skyward_root::releases::Tier::Dev => &all[..2],
+        // A build a workflow made is on GitHub itself alone, so no way that
+        // carries an address carries it.
+        skyward_root::releases::Tier::Dev => &all[..1],
         skyward_root::releases::Tier::Stable => &all[..],
     };
     let proxy = s.root_proxy.min(ways.len() - 1);
