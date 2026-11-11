@@ -19,6 +19,7 @@ members = [
     "crates/skyward-pack",
     "crates/skyward-sys",
     "crates/skyward-lp",
+    "crates/skyward-root",
     "crates/skyward-bootimg",
     "crates/skyward-systems",
     "crates/skyward-system-init",
@@ -46,4 +47,7 @@ strip = true
 
 # The UI draws every pixel of every frame; it is built for speed.
 [profile.release.package.skyward-ui]
+opt-level = 3
+
+[profile.release.package.tiny-skia]
 opt-level = 3
