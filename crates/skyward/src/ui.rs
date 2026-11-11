@@ -1378,6 +1378,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         | Work::SwitchSystem { .. }
         | Work::SystemStopped => start,
     };
+    // What a user's own files open with is the code they set: a phone that
+    // keeps any starts on the page that asks for it, and opening the data
+    // partition is what that page does first.
+    let first = match first == Screen::Home && std::path::Path::new("/data/misc/vold/user_keys/ce").exists() {
+        true => Screen::Decrypt,
+        false => first,
+    };
     let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
     app.set_screen_corners(cfg.display.corner_radius as f32);
     // The settings kept from the starts before are back before the first
@@ -2198,12 +2205,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         }
                         closed = opening.closed;
                         show_closed(&mut app, &closed)?;
-                        // A phone whose user has not signed in starts on the
-                        // page that asks them to: everything else needs their
-                        // own files open.
-                        if first == Screen::Home && closed.iter().any(|c| !c.made_up) {
-                            app.show(Screen::Decrypt);
-                        }
                     }
                     wipe::Event::Ended(outcome) => {
                         let said = outcome.as_ref().map_or_else(wipe::said, |_| "done".to_string());
