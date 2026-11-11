@@ -90,17 +90,6 @@ enum Cmd {
     Reboot { target: String },
     /// Print the bootloader control block in misc.
     Bcb,
-    /// Watch the phone's acceleration sensor for a few seconds and print
-    /// what it says: the pages turn with it, and this says whether the
-    /// sensor stack answers here.
-    #[cfg(target_os = "android")]
-    Orientation {
-        #[arg(long, default_value = "/skyward/device.toml")]
-        config: String,
-        /// How long to watch, in seconds.
-        #[arg(long, default_value_t = 10)]
-        seconds: u64,
-    },
     /// Print what an update package's payload holds: the partitions it
     /// writes, how large each is, and how many steps make it.
     Payload { package: String },
@@ -288,27 +277,6 @@ enum Cmd {
 }
 
 /// Prints the partitions an update package's payload writes.
-/// Watch the acceleration sensor for `seconds` and print what it says, as
-/// the pages turn with it: what answers, and what it is that does not.
-#[cfg(target_os = "android")]
-fn orientation_probe(config: &str, seconds: u64) -> Result<()> {
-    let text = std::fs::read_to_string(config).with_context(|| format!("read {config}"))?;
-    let cfg = skyward_config::DeviceConfig::parse(&text)?;
-    let orientation = cfg.orientation.as_ref().context("the configuration names no sensors")?;
-    println!("swap {} flip_x {} flip_y {}", orientation.swap_xy, orientation.flip_x, orientation.flip_y);
-    let mut sensor = crate::orientation::Sensor::new(orientation);
-    let mut turned = 0;
-    for tick in 0..seconds * 10 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if let Some(direction) = sensor.read(true, tick * 100) {
-            println!("{}ms: {direction:?}", tick * 100);
-            turned += 1;
-        }
-    }
-    println!("{turned} turns in {seconds} s");
-    Ok(())
-}
-
 fn payload(path: &str) -> Result<()> {
     let mut file = std::fs::File::open(path).map_err(|e| anyhow!("open {path}: {e}"))?;
     let update = match skyward_install::package::identify(&mut file)? {
@@ -388,8 +356,6 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
-        #[cfg(target_os = "android")]
-        Cmd::Orientation { config, seconds } => orientation_probe(&config, seconds),
         Cmd::Payload { package } => payload(&package),
         #[cfg(target_os = "android")]
         Cmd::Write { package, slot } => write_payload(&package, &slot),

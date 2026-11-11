@@ -235,17 +235,13 @@ impl Connection {
                 let words: Vec<_> = data.as_chunks::<4>().0.iter().map(|v| u32::from_le_bytes(*v)).collect();
                 if words[1] != SSC { continue; }
                 if words[0] == 5 { bail!("SSC service stopped"); }
-                let _ = skyward_sys::kmsg(&format!("SSC control message: {words:?} from node {}", from.node));
                 if words[0] == 4 && self.server.is_none() {
                     self.server = Some(Address { family: AF_QRTR as u16, node: words[3], port: words[4] });
                     self.ask()?;
                 }
                 continue;
             }
-            if !self.server.is_some_and(|s| s.node == from.node && s.port == from.port) {
-                let _ = skyward_sys::kmsg(&format!("SSC message from node {} port {}: {:02x?}", from.node, from.port, &data[..data.len().min(12)]));
-                continue;
-            }
+            if !self.server.is_some_and(|s| s.node == from.node && s.port == from.port) { continue; }
             for (uid, message, payload) in events(data)? {
                 if uid == LOOKUP && message == 768 && self.sensor.is_none() {
                     let fields = fields(payload)?;

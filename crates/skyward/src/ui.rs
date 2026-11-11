@@ -1424,10 +1424,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let mut turn: Option<Turn> = None;
     let mut turn_canvas = None;
     let mut blocked_touch = false;
-    let mut orientation = cfg.orientation.as_ref().filter(|_| cfg.device.tablet).map(|config| {
-        skyward_sys::kmsg("the pages follow the tablet's sensors").ok();
-        Sensor::new(config)
-    });
+    let mut orientation = cfg.orientation.as_ref().filter(|_| cfg.device.tablet).map(Sensor::new);
     // A page sliding over another draws on three screens' worth of canvas
     // besides the panel's: made ready now, the first slide finds them so.
     Canvas::keep_ready(w, h, 3);
