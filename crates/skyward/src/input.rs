@@ -188,6 +188,10 @@ pub struct Inputs {
     /// the phone awake until it is read.
     wakeful: Wakeful,
     panel: Option<Panel>,
+    /// The name of the touchscreen taken in, so that the device the driver
+    /// makes again after sleeping is the one taken, not the first that looks
+    /// like one.
+    panel_name: Option<String>,
     buttons: Vec<(PathBuf, RawDevice)>,
     seen: HashSet<PathBuf>,
     /// What the touchscreen is told each time its panel is taken in.
@@ -215,6 +219,7 @@ impl Inputs {
             watch,
             wakeful,
             panel: None,
+            panel_name: None,
             buttons: Vec::new(),
             seen: HashSet::new(),
             touch,
@@ -254,8 +259,13 @@ impl Inputs {
                 .is_some_and(|a| a.contains(AbsoluteAxisCode::ABS_MT_POSITION_X) && a.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y));
             let keys = dev.supported_keys().is_some_and(|k| KEYS.iter().any(|c| k.contains(*c)));
             eprintln!("input {}: {:?} direct={direct} multitouch={mt} keys={keys}", path.display(), dev.name().unwrap_or("?"));
-            if direct && mt && self.panel.is_none() {
+            let wanted = match &self.panel_name {
+                Some(name) => dev.name() == Some(name.as_str()),
+                None => true,
+            };
+            if direct && mt && self.panel.is_none() && wanted {
                 self.wakeful.add(dev.as_raw_fd())?;
+                self.panel_name = dev.name().map(str::to_string);
                 self.panel = Some(Panel::new(path, dev)?);
                 for w in &self.touch.writes {
                     fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
