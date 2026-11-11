@@ -1455,6 +1455,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // Started for fastboot, the port goes to the phone's own fastbootd. The
     // page says whether it came up and how far a computer has the port;
     // why it did not come up goes to the kernel log and on screen.
+    // Whether the network the phone keeps a key for has been joined.
+    let mut joined_known = false;
     let mut fastboot = first == Screen::Fastboot;
     let mut port_at = Instant::now();
     // File transfer runs while its switch is on, and offers internal
@@ -1673,6 +1675,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // supplicant does not start, and the WLAN page says why.
     app.state.wlan = cfg.wlan.as_ref().map(|_| Wlan::default());
     let mut wlan = if fastboot { None } else { start_wlan(cfg, &servers)? };
+    if let Some(w) = &wlan {
+        w.send(wlan::Command::On)?;
+    }
     let mut scanned_at = Instant::now();
     app.state.update_server = cfg.update.is_some();
     // Asking the update server, and downloading the full package.
@@ -2432,6 +2437,25 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         typed_key = None;
                     }
                 }
+                // The phone's own network is joined without being asked: the
+                // pages reach the update server as soon as they open, and a
+                // phone whose data is being opened has none other.
+                if !joined_known && w.power == WlanPower::On && w.joined.is_none() {
+                    let known = skyward_net::wlan::known();
+                    let pick = w.networks.iter().find_map(|n| {
+                        known.iter().find(|k| k.ssid == n.ssid).map(|k| (n, k))
+                    });
+                    if let Some((n, k)) = pick {
+                        wlan_worker(&wlan)?.send(wlan::Command::Join {
+                            ssid: n.ssid.clone(),
+                            name: n.name.clone(),
+                            security: n.security,
+                            password: k.key.clone(),
+                        });
+                        joined_known = true;
+                        skyward_sys::kmsg(&format!("joining the network the phone keeps: {}", n.name))?;
+                    }
+                }
                 app.set_wlan(w);
             }
             if let Some(t) = traffic {
@@ -2441,7 +2465,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         // The WLAN page scans again now and then while it shows, as the
         // stock settings do.
         let wlan_on = app.state.wlan.as_ref().is_some_and(|w| w.power == WlanPower::On);
-        if app.screen() == Screen::Wlan && wlan_on && scanned_at.elapsed() >= SCAN_EVERY {
+        // Scanning goes on before the WLAN page is opened, so that the
+        // network the phone keeps can be joined as soon as one is in range.
+        if (app.screen() == Screen::Wlan || !joined_known) && wlan_on && scanned_at.elapsed() >= SCAN_EVERY {
             scanned_at = Instant::now();
             wlan_worker(&wlan)?.send(wlan::Command::Scan);
         }
