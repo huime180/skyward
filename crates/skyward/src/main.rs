@@ -12,11 +12,15 @@ mod decrypt;
 #[cfg(target_os = "android")]
 mod filework;
 #[cfg(target_os = "android")]
+mod firmware;
+#[cfg(target_os = "android")]
 mod haptics;
 #[cfg(target_os = "android")]
 mod input;
 #[cfg(target_os = "android")]
 mod merge;
+#[cfg(any(target_os = "android", test))]
+mod orientation;
 #[cfg(target_os = "android")]
 mod partwork;
 #[cfg(target_os = "android")]
@@ -74,11 +78,40 @@ enum Cmd {
     },
     /// Run as the recovery service (what init starts as /system/bin/recovery).
     Recovery,
+    /// Make firmware available and start the configured kernel processor
+    /// before init starts the recovery's hardware services.
+    #[cfg(target_os = "android")]
+    Firmware {
+        #[arg(long, default_value = "/skyward/device.toml")]
+        config: String,
+    },
     /// Reboot through init: system, recovery, fastboot, bootloader, edl, or
     /// off.
     Reboot { target: String },
     /// Print the bootloader control block in misc.
     Bcb,
+    /// Watch the phone's acceleration sensor for a few seconds and print
+    /// what it says: the pages turn with it, and this says whether the
+    /// sensor stack answers here.
+    #[cfg(target_os = "android")]
+    Orientation {
+        #[arg(long, default_value = "/skyward/device.toml")]
+        config: String,
+        /// How long to watch, in seconds.
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+    },
+    /// Print what an update package's payload holds: the partitions it
+    /// writes, how large each is, and how many steps make it.
+    Payload { package: String },
+    /// Write an update package's partitions straight into a slot, without
+    /// the snapshots update_engine keeps.
+    Write {
+        package: String,
+        /// The slot to write into, `a` or `b`.
+        #[arg(long)]
+        slot: String,
+    },
     /// Print the logical partition metadata in super.
     Lp {
         /// The super partition, or an image of its start.
@@ -110,6 +143,49 @@ enum Cmd {
     /// merge where it has not begun, and follow it to its end.
     #[cfg(target_os = "android")]
     Merge,
+    /// List the modules the phone's root manager has, and how each stands.
+    #[cfg(target_os = "android")]
+    RootModules {
+        /// The folder the modules are in.
+        #[arg(long, default_value = "/data/adb/modules")]
+        dir: PathBuf,
+    },
+    /// Turn a module on or off, by the name of its directory.
+    #[cfg(target_os = "android")]
+    ModuleEnable {
+        id: String,
+        /// Turn it off rather than on.
+        #[arg(long)]
+        off: bool,
+        #[arg(long, default_value = "/data/adb/modules")]
+        dir: PathBuf,
+    },
+    /// Have the manager take a module away when the phone next starts.
+    #[cfg(target_os = "android")]
+    ModuleUninstall {
+        id: String,
+        #[arg(long, default_value = "/data/adb/modules")]
+        dir: PathBuf,
+    },
+    /// Install a module zip with the manager the phone has.
+    #[cfg(target_os = "android")]
+    ModuleInstall { zip: PathBuf },
+    /// Patch the image a root manager patches, for the slot the phone runs
+    /// from, into `out`, with the manager the phone has. An APK is used only
+    /// where the phone has no manager of its own.
+    #[cfg(target_os = "android")]
+    Patch {
+        /// The manager's APK to take the patcher from, where the phone has
+        /// no manager of its own.
+        #[arg(long)]
+        apk: Option<PathBuf>,
+        /// The partition to patch, `init_boot` or `boot`; whichever a phone
+        /// this is, unless said.
+        #[arg(long)]
+        partition: Option<String>,
+        /// Where the patched image goes.
+        out: PathBuf,
+    },
     /// Keep the configuration's services that this phone runs going until
     /// stopped.
     #[cfg(target_os = "android")]
@@ -211,6 +287,73 @@ enum Cmd {
     },
 }
 
+/// Prints the partitions an update package's payload writes.
+/// Watch the acceleration sensor for `seconds` and print what it says, as
+/// the pages turn with it: what answers, and what it is that does not.
+#[cfg(target_os = "android")]
+fn orientation_probe(config: &str, seconds: u64) -> Result<()> {
+    let text = std::fs::read_to_string(config).with_context(|| format!("read {config}"))?;
+    let cfg = skyward_config::DeviceConfig::parse(&text)?;
+    let orientation = cfg.orientation.as_ref().context("the configuration names no sensors")?;
+    println!("swap {} flip_x {} flip_y {}", orientation.swap_xy, orientation.flip_x, orientation.flip_y);
+    let mut sensor = crate::orientation::Sensor::new(orientation);
+    let mut turned = 0;
+    for tick in 0..seconds * 10 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(direction) = sensor.read(true, tick * 100) {
+            println!("{}ms: {direction:?}", tick * 100);
+            turned += 1;
+        }
+    }
+    println!("{turned} turns in {seconds} s");
+    Ok(())
+}
+
+fn payload(path: &str) -> Result<()> {
+    let mut file = std::fs::File::open(path).map_err(|e| anyhow!("open {path}: {e}"))?;
+    let update = match skyward_install::package::identify(&mut file)? {
+        skyward_install::package::Package::Update(update) => update,
+        _ => anyhow::bail!("{path} holds no update payload"),
+    };
+    let manifest = skyward_install::payload::read(&mut file, update.payload_offset, update.payload_size)?;
+    println!("payload {} bytes at {}, blocks of {}", update.payload_size, update.payload_offset, manifest.block());
+    for partition in &manifest.partitions {
+        let how = match partition.carried() {
+            true => String::new(),
+            false => String::from(" (a step this code does not carry out)"),
+        };
+        println!("{}: {} bytes, {} steps{how}", partition.name, partition.size, partition.operations.len());
+    }
+    Ok(())
+}
+
+/// Writes an update package's partitions into a slot.
+#[cfg(target_os = "android")]
+fn write_payload(path: &str, slot: &str) -> Result<()> {
+    let slot = match slot {
+        "a" | "A" => skyward_vab::Slot::A,
+        "b" | "B" => skyward_vab::Slot::B,
+        other => anyhow::bail!("unknown slot {other:?}"),
+    };
+    let mut file = std::fs::File::open(path).map_err(|e| anyhow!("open {path}: {e}"))?;
+    let update = match skyward_install::package::identify(&mut file)? {
+        skyward_install::package::Package::Update(update) => update,
+        _ => anyhow::bail!("{path} holds no update payload"),
+    };
+    let left = skyward_install::direct::write(
+        Path::new(path),
+        &update,
+        Path::new("/dev/block/by-name"),
+        slot,
+        &mut |name, at, total| println!("{}/{total} {name}", at + 1),
+    )?;
+    for name in left {
+        println!("{name} is left as it is: the package writes it in a way this code does not carry out");
+    }
+    println!("written to slot {}", slot.letter());
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // init starts the recovery service by path with no arguments.
     let started_as = std::env::args_os().next().unwrap_or_default();
@@ -236,10 +379,22 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Recovery => recovery(),
+        #[cfg(target_os = "android")]
+        Cmd::Firmware { config } => {
+            let cfg = DeviceConfig::load(config)?;
+            firmware::start(cfg.firmware.as_ref().context("the configuration names no firmware partition")?)
+        },
         Cmd::Reboot { target } => {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
+        #[cfg(target_os = "android")]
+        Cmd::Orientation { config, seconds } => orientation_probe(&config, seconds),
+        Cmd::Payload { package } => payload(&package),
+        #[cfg(target_os = "android")]
+        Cmd::Write { package, slot } => write_payload(&package, &slot),
+        #[cfg(not(target_os = "android"))]
+        Cmd::Write { .. } => anyhow::bail!("writing a package's partitions needs the recovery"),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -262,6 +417,32 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Identify { file } => identify(&file),
+        #[cfg(target_os = "android")]
+        Cmd::Patch { apk, partition, out } => patch(apk, partition, out),
+        #[cfg(target_os = "android")]
+        Cmd::RootModules { dir } => {
+            for m in skyward_root::modules::list(&dir)? {
+                println!(
+                    "{:<24} {:<28} {:<12} {}{}",
+                    m.id,
+                    m.name,
+                    m.version,
+                    if m.enabled { "on" } else { "off" },
+                    if m.removed { ", to be removed" } else { "" }
+                );
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "android")]
+        Cmd::ModuleEnable { id, off, dir } => skyward_root::modules::set_enabled(&dir, &id, !off),
+        #[cfg(target_os = "android")]
+        Cmd::ModuleUninstall { id, dir } => skyward_root::modules::uninstall(&dir, &id),
+        #[cfg(target_os = "android")]
+        Cmd::ModuleInstall { zip } => {
+            let manager = skyward_root::detect().context("no root manager on the phone")?;
+            println!("installs with {}", manager.name());
+            skyward_root::modules::install(&manager, &zip)
+        }
         Cmd::Mount => {
             let mounts = skyward_vab::mount_partitions(booted_slot()?)?;
             for d in &mounts.damaged {
@@ -276,7 +457,11 @@ fn main() -> Result<()> {
         #[cfg(target_os = "android")]
         Cmd::Services { config } => {
             let props = skyward_info::installed_props(booted_slot()?)?;
-            let mut services = DeviceConfig::load(&config)?.services;
+            let cfg = DeviceConfig::load(&config)?;
+            if let Some(orientation) = &cfg.orientation {
+                orientation::prepare(orientation)?;
+            }
+            let mut services = cfg.services;
             services.retain(|s| s.runs_on(&props));
             services::start(&services, secure::libraries()?.as_deref())?;
             loop {
@@ -538,6 +723,11 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
     if let Some(dir) = &libraries {
         skyward_sys::kmsg(&format!("the phone's own libraries are at {}", dir.display()))?;
     }
+    if let Some(orientation) = &cfg.orientation {
+        if let Err(e) = orientation::prepare(orientation) {
+            skyward_sys::kmsg(&format!("orientation services not prepared: {e:#}"))?;
+        }
+    }
     services::start(&services, libraries.as_deref())?;
     agree_on_the_notes_key(&registering)
 }
@@ -683,6 +873,11 @@ fn recovery() -> Result<()> {
         std::fs::set_permissions(skyward_sys::RUN, std::fs::Permissions::from_mode(0o755))
             .with_context(|| format!("open {} to the recovery's other users", skyward_sys::RUN))?;
         skyward_sys::keep_log(Path::new(skyward_sys::LOG))?;
+        let panic_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = skyward_sys::kmsg(&format!("recovery panic: {info}"));
+            panic_hook(info);
+        }));
         // A recovery that ended with a function of its own in the port took
         // the port with it; going through "none" takes that function off.
         if skyward_sys::prop("sys.usb.state").is_some_and(|s| s != "adb") {
@@ -817,6 +1012,43 @@ fn info(config: &str) -> Result<()> {
     }
     let parts = skyward_block::list_by_name(skyward_block::BY_NAME)?;
     println!("partitions    = {} under {}", parts.len(), skyward_block::BY_NAME);
+    Ok(())
+}
+
+/// Patch the image a root manager patches, for the slot the phone runs from,
+/// into `out`. The tools come from `apk` where one is given, and from the
+/// manager installed on the phone otherwise.
+#[cfg(target_os = "android")]
+fn patch(apk: Option<PathBuf>, partition: Option<String>, out: PathBuf) -> Result<()> {
+    use skyward_root::{Manager, Options};
+    let slot = booted_slot()?;
+    let by_name = Path::new(skyward_root::BY_NAME);
+    let partition = partition.unwrap_or_else(|| skyward_root::target(by_name, slot).to_string());
+    let into = out.parent().context("a place to patch in")?.to_path_buf();
+    std::fs::create_dir_all(&into).with_context(|| format!("create {}", into.display()))?;
+    let stock = into.join("stock.img");
+    skyward_root::read(by_name, &partition, slot, &stock)?;
+    println!("stock   {}", stock.display());
+    // The manager the phone has is the one that patches it: another would
+    // write a boot image its own manager cannot use.
+    let installed = skyward_root::detect();
+    if let (Some(manager), Some(_)) = (&installed, &apk) {
+        println!("note    {} is installed here, so its own patcher is used", manager.name());
+    }
+    let manager = match (installed, &apk) {
+        (Some(manager), _) => manager,
+        (None, Some(apk)) => Manager::Magisk(skyward_root::Magisk::from_apk(apk, &into.join("magisk"))?),
+        (None, None) => return Err(anyhow!("no root manager on the phone, and no APK given")),
+    };
+    println!("manager {} {}", manager.name(), manager.version().unwrap_or("(says no version)"));
+    println!("patches {partition}{}", slot.suffix());
+    let options = Options::default();
+    match &manager {
+        Manager::Magisk(m) => m.patch(&stock, &out, &options)?,
+        Manager::KernelSu(k) => k.patch(&stock, &out)?,
+        Manager::Apatch(a) => a.patch(&stock, &out, &options)?,
+    }
+    println!("patched {} bytes into {}", std::fs::metadata(&out)?.len(), out.display());
     Ok(())
 }
 
