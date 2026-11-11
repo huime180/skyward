@@ -12,7 +12,14 @@ rustup component add clippy
 ndk="${ANDROID_NDK_HOME:-$HOME/android-ndk-r29}"
 if [ ! -d "$ndk" ]; then
     echo "fetching the Android NDK r29 into $ndk"
-    curl -fsSL -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+    # Google's own address is not reached everywhere: the mirror carries the
+    # same archive.
+    for url in \
+        https://dl.google.com/android/repository/android-ndk-r29-linux.zip \
+        https://googledownloads.cn/android/repository/android-ndk-r29-linux.zip \
+        https://mirrors.cloud.tencent.com/AndroidSDK/android-ndk-r29-linux.zip; do
+        if curl -fSL --retry 2 -o /tmp/ndk.zip "$url"; then break; fi
+    done
     unzip -q /tmp/ndk.zip -d "$HOME"
     rm -f /tmp/ndk.zip
 fi
