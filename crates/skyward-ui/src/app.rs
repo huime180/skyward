@@ -5431,6 +5431,12 @@ impl App {
     }
 
     /// Open `screen` over the page shown, sliding in over it.
+    /// Put `screen` on show: the runtime starts on the page the phone needs
+    /// first, where it starts on the home page and a user's files are closed.
+    pub fn show(&mut self, screen: Screen) {
+        self.open(screen);
+    }
+
     fn open(&mut self, screen: Screen) {
         self.leave(false);
         self.push(screen);
