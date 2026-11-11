@@ -84,7 +84,14 @@ impl Ramdisk {
     /// with the reference `lz4` tool in legacy framing (the kernel's initramfs
     /// unpacker reads no other LZ4 framing) at its highest compression.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        lz4_tool(&self.archive()?)
+        // The tool packs tighter than the plain blocks here do; where it is
+        // not installed, as on the phone the image is built on, the blocks
+        // still make a ramdisk the kernel reads.
+        let archive = self.archive()?;
+        match lz4_tool(&archive) {
+            Ok(packed) => Ok(packed),
+            Err(_) => Ok(lz4_legacy(&archive)),
+        }
     }
 
     /// Pack as a newc archive, uncompressed.
