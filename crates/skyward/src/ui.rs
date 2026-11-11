@@ -1438,6 +1438,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
+    // When the touchscreen is to be told again, a moment after the panel lights.
+    let mut arm_at: Option<Instant> = None;
     // When the panel gone dark began to rest.
     let mut rested_at: Option<Instant> = None;
     // Started for fastboot, the port goes to the phone's own fastbootd. The
@@ -1818,10 +1820,11 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 shown = true;
             }
             if blanked {
-                // The panel is lit again: the touchscreen is taken in
-                // afresh, so a driver that slept with the panel reports
-                // again.
-                inputs.reopen()?;
+                // The panel is lit again: the touchscreen is told again what
+                // it is told when it is taken in, and told once more a moment
+                // later, so a driver that resumed in its own time hears it.
+                inputs.rearm()?;
+                arm_at = Some(Instant::now() + Duration::from_secs(1));
             }
             blanked = false;
         } else if !blanked {
@@ -1835,6 +1838,10 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             present(&mut surface, &screen, rotation, &mut native)?;
             surface.settle()?;
             blanked = true;
+        }
+        if arm_at.is_some_and(|at| Instant::now() >= at) {
+            inputs.rearm()?;
+            arm_at = None;
         }
         // After the frame is on the panel, so a panel coming back on lights
         // with what it should show now, never with what it showed when it

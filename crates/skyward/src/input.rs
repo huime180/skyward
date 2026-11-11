@@ -280,16 +280,6 @@ impl Inputs {
         Ok(())
     }
 
-    /// Take the touchscreen in afresh: its device is opened again, and the
-    /// words it is told when first taken in are told again. A driver that
-    /// slept with the panel reports again once its device is opened.
-    pub fn reopen(&mut self) -> Result<()> {
-        if let Some(panel) = self.panel.take() {
-            self.seen.remove(&panel.path);
-        }
-        self.scan()
-    }
-
     /// Tell the touchscreen again what its panel takes, as taking it in did:
     /// a driver that slept with the panel is woken by the same words.
     pub fn rearm(&mut self) -> Result<()> {
