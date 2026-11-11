@@ -111,16 +111,6 @@ enum Attempt {
     Unreached(anyhow::Error),
 }
 
-impl Attempt {
-    /// The answer GitHub sent, or the last way that did not reach it.
-    fn said(self) -> anyhow::Error {
-        match self {
-            Attempt::Answered(said) => anyhow!(said),
-            Attempt::Unreached(e) => e,
-        }
-    }
-}
-
 pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
     // A phone that reaches GitHub by one way may not reach it by another:
     // the answer is asked for by each in turn until one is reached, and an
