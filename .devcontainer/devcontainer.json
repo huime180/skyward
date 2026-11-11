@@ -1,0 +1,16 @@
+{
+  "name": "Skyward",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {}
+  },
+  "postCreateCommand": "bash scripts/dev-setup.sh",
+  "remoteEnv": {
+    "ANDROID_NDK_HOME": "${containerEnv:HOME}/android-ndk-r29"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer"]
+    }
+  }
+}
