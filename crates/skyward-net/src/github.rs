@@ -1,11 +1,11 @@
 //! Skyward's own releases on GitHub: which is the newest, and the zip in
 //! it for one phone, as the release workflow names each phone's.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::Deserialize;
 
 /// Where GitHub answers which release of Skyward is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/kirklin/skyward/releases/latest";
+pub const LATEST: &str = "https://api.github.com/repos/huime180/skyward/releases/latest";
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
@@ -94,26 +94,59 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
 
 /// Ask GitHub for Skyward's newest release, and its zip for the phone
 /// `codename` names, as the build of version `running`.
+/// The ways to GitHub a phone may take: the address itself, and the
+/// addresses that carry any GitHub address through a machine reached here.
+pub const WAYS: [&str; 4] = ["", "https://gh-proxy.com/", "https://ghproxy.homeboyc.cn/", "https://github.akams.cn/"];
+
+/// `url` as each of [`WAYS`] carries it, in the order they are tried.
+fn ways(url: &str) -> Vec<String> {
+    WAYS.iter().map(|way| format!("{way}{url}")).collect()
+}
+
 pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
-    let mut response = agent
-        .get(LATEST)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", API_VERSION)
-        .header("User-Agent", format!("Skyward/{running}"))
-        .call()
-        .with_context(|| format!("ask {LATEST}"))?;
-    let status = response.status();
-    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {LATEST}"))?;
-    if !status.is_success() {
-        bail!(refusal(status, &body));
+    // A phone that reaches GitHub by one way may not reach it by another:
+    // the answer is asked for by each in turn.
+    let mut said = None;
+    for url in ways(LATEST) {
+        let attempt = (|| -> Result<Newest> {
+            let mut response = agent
+                .get(&url)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", API_VERSION)
+                .header("User-Agent", format!("Skyward/{running}"))
+                .call()
+                .with_context(|| format!("ask {url}"))?;
+            let status = response.status();
+            let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {url}"))?;
+            if !status.is_success() {
+                bail!(refusal(status, &body));
+            }
+            newest(&body, codename, running)
+        })();
+        match attempt {
+            Ok(newest) => return Ok(newest),
+            Err(e) => said = Some(e),
+        }
     }
-    newest(&body, codename, running)
+    Err(said.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
 }
 
 /// Where the file a build's `url` hands out is now, as GitHub's API sends
 /// the build of version `running` that asks for it on: a short-lived
 /// address of the file itself, away from github.com.
 pub fn locate(agent: &ureq::Agent, url: &str, running: &str) -> Result<String> {
+    let mut said = None;
+    for way in ways(url) {
+        match locate_by(agent, &way, running) {
+            Ok(found) => return Ok(found),
+            Err(e) => said = Some(e),
+        }
+    }
+    Err(said.unwrap_or_else(|| anyhow!("no way to GitHub was tried")))
+}
+
+/// [`locate`] by one address.
+fn locate_by(agent: &ureq::Agent, url: &str, running: &str) -> Result<String> {
     let mut response = agent
         .get(url)
         .header("Accept", "application/octet-stream")
