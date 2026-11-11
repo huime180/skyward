@@ -145,19 +145,31 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         200 => {}
         status => bail!(Refused(status)),
     }
-    let total = content_length(head.headers()).context("the server does not say how long the package is")?;
+    // A server that sends no length, as some that carry GitHub's files do,
+    // still sends the file: it is taken as it comes, and what an earlier
+    // attempt left is started over rather than carried on from.
+    let total = content_length(head.headers());
     let mut file = OpenOptions::new().create(true).read(true).append(true).open(&part).with_context(|| format!("open {}", part.display()))?;
     let mut have = file.metadata().with_context(|| format!("read {}", part.display()))?.len();
-    if have > total {
-        file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
-        have = 0;
+    match total {
+        Some(total) if have > total => {
+            file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
+            have = 0;
+        }
+        None if have > 0 => {
+            file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
+            have = 0;
+        }
+        _ => {}
     }
-    let room = free(dir)?;
-    if total - have > room {
-        bail!(NoRoom { needed: total - have, free: room });
+    if let Some(total) = total {
+        let room = free(dir)?;
+        if total - have > room {
+            bail!(NoRoom { needed: total - have, free: room });
+        }
     }
     let mut hash = hash_of::<D>(&mut file, have, stop, progress)?;
-    if have < total {
+    if total.is_none() || have < total.unwrap_or(0) {
         let mut asked = agent.get(url);
         if have > 0 {
             asked = asked.header("Range", format!("bytes={have}-"));
@@ -177,24 +189,38 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         let mut body = response.body_mut().with_config().limit(u64::MAX).reader();
         let mut buf = vec![0u8; CHUNK];
         let mut done = have;
-        progress(Progress::Downloading { done, total });
-        while done < total {
+        progress(Progress::Downloading { done, total: total.unwrap_or(0) });
+        loop {
             if stop.load(Ordering::Relaxed) {
                 bail!(crate::Stopped);
             }
+            if let Some(total) = total {
+                if done >= total {
+                    break;
+                }
+            }
             let n = body.read(&mut buf).context("download the package")?;
             if n == 0 {
-                bail!("the server stopped sending at {done} of {total} bytes");
+                match total {
+                    Some(total) => bail!("the server stopped sending at {done} of {total} bytes"),
+                    None => break,
+                }
             }
-            let n = n.min((total - done) as usize);
+            let n = match total {
+                Some(total) => n.min((total - done) as usize),
+                None => n,
+            };
             file.write_all(&buf[..n]).with_context(|| format!("write {}", part.display()))?;
             hash.update(&buf[..n]);
             done += n as u64;
-            progress(Progress::Downloading { done, total });
+            progress(Progress::Downloading { done, total: total.unwrap_or(0) });
         }
         file.sync_all().with_context(|| format!("write {} through", part.display()))?;
     }
-    if hex(&hash.finalize()) != sum.to_lowercase() {
+    // A manager's release says nothing of its package's digest: what is
+    // downloaded of one is taken as it came.
+    // A package whose release says nothing of its digest is taken as it came.
+    if !sum.is_empty() && hex(&hash.finalize()) != sum.to_lowercase() {
         drop(file);
         fs::remove_file(&part).with_context(|| format!("delete {}", part.display()))?;
         bail!(Damaged);
