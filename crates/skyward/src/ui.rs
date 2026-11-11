@@ -1378,10 +1378,11 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         | Work::SwitchSystem { .. }
         | Work::SystemStopped => start,
     };
-    // What a user's own files open with is the code they set: a phone that
-    // keeps any starts on the page that asks for it, and opening the data
-    // partition is what that page does first.
-    let first = match first == Screen::Home && std::path::Path::new("/data/misc/vold/user_keys/ce").exists() {
+    // The data partition is not mounted until it is opened, so what it keeps
+    // cannot be asked before then: a recovery that would start on the home
+    // page starts on the page that opens it, which goes on to the home page
+    // when the phone keeps nothing behind a code.
+    let first = match first == Screen::Home {
         true => Screen::Decrypt,
         false => first,
     };
