@@ -1438,7 +1438,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
-    let mut armed_at = Instant::now();
     // When the panel gone dark began to rest.
     let mut rested_at: Option<Instant> = None;
     // Started for fastboot, the port goes to the phone's own fastbootd. The
@@ -1819,18 +1818,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                 shown = true;
             }
             if blanked {
-                // The panel is lit again: the touchscreen is told what it
-                // was told when it was taken in, so its driver reports
-                // positions again.
-                inputs.rearm()?;
-                armed_at = Instant::now();
+            if blanked {
+                // The panel is lit again: the touchscreen is taken in
+                // afresh, so a driver that slept with the panel reports
+                // again.
+                inputs.reopen()?;
             }
             blanked = false;
         } else if !blanked {
-            // The touchscreen is told what it is told when it is taken in,
             // so a driver that sleeps with the panel keeps reporting.
             inputs.rearm()?;
-            armed_at = Instant::now();
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
             // above zero rather than cutting it shows nothing as it goes off.
