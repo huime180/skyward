@@ -145,7 +145,7 @@ fn ask_by(agent: &ureq::Agent, url: &str, codename: &str, running: &str) -> Resu
         .header("User-Agent", format!("Skyward/{running}"))
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(..) => Attempt::Answered(format!("ask {url}: {e}")),
+            ureq::Error::StatusCode(..) => Attempt::Answered(format!("ask {url}: {e}")),
             e => Attempt::Unreached(anyhow!(e).context(format!("ask {url}"))),
         })?;
     let status = response.status();
@@ -183,7 +183,7 @@ fn locate_by(agent: &ureq::Agent, url: &str, running: &str) -> Result<String, At
         .build()
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(..) => Attempt::Answered(format!("ask {url}: {e}")),
+            ureq::Error::StatusCode(..) => Attempt::Answered(format!("ask {url}: {e}")),
             e => Attempt::Unreached(anyhow!(e).context(format!("ask {url}"))),
         })?;
     let status = response.status();
