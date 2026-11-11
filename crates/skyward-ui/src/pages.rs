@@ -2640,28 +2640,19 @@ pub fn package_images(cx: &Ctx) -> Frame {
     let mut out = Vec::new();
     let top = t.m.content_top;
     let title = l.pick(["包内镜像", "包內映像檔", "Images in the package"]);
-    let listed = s.package_list.clone().unwrap_or_default();
-    // The page is as tall as the list it shows: a whole package holds more
-    // partitions than a screen does.
-    let sizes: Vec<String> = listed.iter().map(|(_, size)| fmt::bytes(*size)).collect();
-    let rows: Vec<Row> = listed
-        .iter()
-        .enumerate()
-        .map(|(at, (name, _))| Row::new(name.as_str()).subtitle(sizes[at].as_str()).trail(Trail::Arrow))
-        .collect();
-    // Room for what sits above and below the list: the progress of an image
-    // being taken out, the row that hands one to the flash page, the words
-    // that say what went wrong, and the note under it.
-    let extra = t.m.card_gap * 4.0 + t.m.row_h * 2.0 + t.m.margin * 8.0;
-    let mut c = rows_page(cx, &rows, extra);
-    let mut y = top;
+    // The room the card that says how far an image has come takes, kept
+    // whether or not one is being taken out: a page drawn again with a row
+    // held down is laid out as it was.
+    let room = t.m.dp(89.7) + t.m.card_gap;
+    let mut c = long_page(cx);
+    let mut y = top + room;
     if let Some((name, done, all)) = crate::app::taking() {
         let share = match all {
             0 => 0.0,
             _ => done as f32 / all as f32,
         };
         let detail = format!("{} / {}", fmt::bytes(done), fmt::bytes(all));
-        y = widgets::progress_card(&mut c, t, f, y, &format!("正在提取 {name}"), &detail, Some(share));
+        let _ = widgets::progress_card(&mut c, t, f, top, &format!("正在提取 {name}"), &detail, Some(share));
     }
     if let Some(path) = s.pending_flash.clone() {
         let row = Row::new(l.pick(["已提取，进入刷入页", "已提取，進入刷入頁", "Taken out: flash it"]))
@@ -2671,12 +2662,13 @@ pub fn package_images(cx: &Ctx) -> Frame {
         out.extend(hits(&block.rows, &[Action::FlashTaken]));
         y = block.bottom;
     }
+    let listed = s.package_list.clone().unwrap_or_default();
     if listed.is_empty() {
         let said = s
             .package_said
             .clone()
             .unwrap_or_else(|| l.pick(["这个包没有可提取的镜像", "這個包沒有可提取的映像檔", "the package holds no image to take out"]).to_string());
-        let y = widgets::paragraph(&mut c, t, f, top, &said);
+        let y = widgets::paragraph(&mut c, t, f, y, &said);
         return Frame::new(t, fit(c, t, y), out, title, top);
     }
     // What went wrong, or what is not carried out, sits above the list: a
@@ -2684,6 +2676,12 @@ pub fn package_images(cx: &Ctx) -> Frame {
     if let Some(said) = s.package_said.clone() {
         y = widgets::paragraph(&mut c, t, f, y, &said);
     }
+    let sizes: Vec<String> = listed.iter().map(|(_, size)| fmt::bytes(*size)).collect();
+    let rows: Vec<Row> = listed
+        .iter()
+        .enumerate()
+        .map(|(at, (name, _))| Row::new(name.as_str()).subtitle(sizes[at].as_str()).trail(Trail::Arrow))
+        .collect();
     let block = widgets::list(&mut c, t, f, y, &rows);
     let picks: Vec<Action> = (0..rows.len()).map(Action::PickPackageImage).collect();
     out.extend(hits(&block.rows, &picks));
