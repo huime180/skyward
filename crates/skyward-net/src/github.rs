@@ -96,7 +96,7 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
 /// `codename` names, as the build of version `running`.
 /// The ways to GitHub a phone may take: the address itself, and the
 /// addresses that carry any GitHub address through a machine reached here.
-pub const WAYS: [&str; 4] = ["", "https://gh-proxy.com/", "https://ghproxy.homeboyc.cn/", "https://github.akams.cn/"];
+pub const WAYS: [&str; 3] = ["", "https://gh-proxy.com/", "https://ghproxy.net/"];
 
 /// `url` as each of [`WAYS`] carries it, in the order they are tried.
 fn ways(url: &str) -> Vec<String> {

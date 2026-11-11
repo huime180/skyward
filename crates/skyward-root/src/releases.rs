@@ -44,11 +44,10 @@ pub fn downloaded() -> Vec<std::path::PathBuf> {
 
 /// The ways to reach GitHub a page offers: itself, and the services that
 /// carry it faster where it is slow.
-pub const MIRRORS: [(&str, &str); 4] = [
+pub const MIRRORS: [(&str, &str); 3] = [
     ("直连", ""),
     ("gh-proxy.com", "https://gh-proxy.com/"),
-    ("ghfast.top", "https://ghfast.top/"),
-    ("gh-proxy.net", "https://gh-proxy.net/"),
+    ("ghproxy.net", "https://ghproxy.net/"),
 ];
 
 /// `url` reached through `mirror`, or as it is where there is none.
