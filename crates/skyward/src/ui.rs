@@ -1827,6 +1827,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             }
             blanked = false;
         } else if !blanked {
+            // The touchscreen is told what it is told when it is taken in,
+            // so a driver that sleeps with the panel keeps reporting.
+            inputs.rearm()?;
             armed_at = Instant::now();
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
@@ -1835,11 +1838,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             present(&mut surface, &screen, rotation, &mut native)?;
             surface.settle()?;
             blanked = true;
-        } else if blanked && armed_at.elapsed() >= Duration::from_secs(2) {
-            // A panel that is dark may have taken its touchscreen with it:
-            // told again, the driver reports a touch that lights it.
-            inputs.rearm()?;
-            armed_at = Instant::now();
         }
         // After the frame is on the panel, so a panel coming back on lights
         // with what it should show now, never with what it showed when it
