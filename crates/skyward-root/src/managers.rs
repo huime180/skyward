@@ -102,6 +102,31 @@ impl Kind {
     }
 }
 
+/// The package to patch from: `path` itself where it is one, or the arm64
+/// package an archive of them holds, as a workflow hands its build out.
+pub fn expand(path: &Path, work: &Path) -> Result<PathBuf> {
+    if kind(path).is_ok() {
+        return Ok(path.to_path_buf());
+    }
+    let mut zip = ZipArchive::new(File::open(path).with_context(|| format!("open {}", path.display()))?)?;
+    let names: Vec<String> = zip
+        .file_names()
+        .filter(|name| name.to_ascii_lowercase().ends_with(".apk"))
+        .map(str::to_string)
+        .collect();
+    let Some(pick) = names.iter().find(|name| name.contains("arm64")).or_else(|| names.first()) else {
+        // Not an archive of packages: the error kind() gave is the one to say.
+        return kind(path).map(|_| path.to_path_buf());
+    };
+    fs::create_dir_all(work).with_context(|| format!("create {}", work.display()))?;
+    let mut bytes = Vec::new();
+    zip.by_name(pick)?.read_to_end(&mut bytes)?;
+    let name = pick.rsplit('/').next().unwrap_or("manager.apk");
+    let at = work.join(name);
+    fs::write(&at, &bytes).with_context(|| format!("write {}", at.display()))?;
+    Ok(at)
+}
+
 /// Which manager the package at `apk` is, by the library it ships.
 pub fn kind(apk: &Path) -> Result<Kind> {
     let mut zip = ZipArchive::new(File::open(apk).with_context(|| format!("open {}", apk.display()))?)

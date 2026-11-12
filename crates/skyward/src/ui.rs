@@ -1167,7 +1167,10 @@ fn manager_from(source: &skyward_ui::app::RootSource, work: &Path) -> Result<sky
         // A package carries its manager's own patcher: which one it is
         // decides how it is run.
         skyward_ui::app::RootSource::Apk(at) => {
-            let apk = std::path::Path::new(at);
+            // What a workflow hands out is an archive of packages: the
+            // package inside is the one to patch with.
+            let inner = work.join("incoming");
+            let apk = &skyward_root::apk::expand(std::path::Path::new(at), &inner)?;
             let into = work.join("apk");
             match skyward_root::apk::kind(apk)? {
                 skyward_root::apk::Kind::Magisk => {
