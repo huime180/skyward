@@ -6,20 +6,25 @@ license.workspace = true
 
 [dependencies]
 abootimg-oxide = "0.5.2"
+brotli = "8.0.2"
+bzip2-rs = "0.1.2"
 anyhow = { workspace = true }
 cms = "0.2.3"
 cpio = "0.4.1"
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 libc = { workspace = true }
 lz4_flex = "0.14.0"
+lzma-rs = "0.3.0"
 p256 = { version = "0.13.2", features = ["pkcs8"] }
 polyfuse-kernel = "0.2.0"
 rsa = "0.9.10"
+ruzstd = "0.8.1"
 sha1 = { version = "0.10.7", features = ["oid"] }
 sha2 = { version = "0.10.9", features = ["oid"] }
 skyward-block = { path = "../skyward-block" }
 skyward-config = { path = "../skyward-config" }
 skyward-info = { path = "../skyward-info" }
+skyward-root = { path = "../skyward-root" }
 skyward-sys = { path = "../skyward-sys" }
 skyward-systems = { path = "../skyward-systems" }
 skyward-vab = { path = "../skyward-vab" }
