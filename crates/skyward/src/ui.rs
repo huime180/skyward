@@ -1029,7 +1029,7 @@ fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPla
         // download on where the mirror carries it: a build taken as it is
         // fails where the same build through the way the page chose came.
         _ => Ok(ManagerPlan {
-            name: "manager.zip".to_string(),
+            name: "manager.apk".to_string(),
             url: match tier {
                 Tier::Dev => releases::nightly_via(variant, proxy),
                 Tier::Stable => releases::through(mirror, &releases::nightly(variant)),
@@ -2086,7 +2086,16 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                         }
                                     };
                                     skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
-                                        .map_err(|e| format!("{e:#}"))
+                                        .map_err(|e| format!("{e:#}"))?;
+                                    // A workflow hands out an archive of packages:
+                                    // the package inside is what is kept, where
+                                    // the archive was.
+                                    let dir = at.parent().unwrap_or(std::path::Path::new("."));
+                                    let apk = skyward_root::apk::expand(&at, dir).map_err(|e| format!("{e:#}"))?;
+                                    if apk != at {
+                                        std::fs::rename(&apk, &at).map_err(|e| format!("{e:#}"))?;
+                                    }
+                                    Ok(())
                                 })
                                 .expect("the download thread starts"),
                             stop,
