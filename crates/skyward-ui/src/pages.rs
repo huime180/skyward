@@ -4036,9 +4036,10 @@ pub fn root_download(cx: &Ctx) -> Frame {
     // A build a workflow made comes from nightly.link, which only the way
     // to GitHub that carries any address carries: the phone owner's own.
     let all = skyward_root::releases::MIRRORS;
-    // A build a workflow made is handed out by nightly.link, which only the
-    // one way here reaches: it is named instead of offered.
-    const DEV: [(&str, &str); 1] = [("proxy.huime.top", "")];
+    // A build a workflow made is handed out by nightly.link, which the
+    // address itself reaches only where it is not blocked: the one machine
+    // here that reaches it is offered beside it.
+    const DEV: [(&str, &str); 2] = [("直连", ""), ("proxy.huime.top", skyward_root::releases::DEV_PROXY)];
     let ways: &[(&str, &str)] = match tier {
         skyward_root::releases::Tier::Dev => &DEV,
         skyward_root::releases::Tier::Stable => &all[..],

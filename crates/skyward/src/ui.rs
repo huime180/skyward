@@ -1009,10 +1009,7 @@ fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPla
     // the other mirrors reach GitHub's own files alone.
     // A build a workflow made is on GitHub itself alone: the ways that carry
     // an address carry a release file, not this.
-    let proxy = match tier {
-        Tier::Dev => 0,
-        Tier::Stable => proxy,
-    };
+
     let mirror = releases::MIRRORS.get(proxy).map(|(_, url)| *url).unwrap_or("");
     match (tier, releases::has_releases(variant)) {
         // The newest release carries the package of the stable tier, where
@@ -1031,7 +1028,13 @@ fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPla
         // What a workflow built comes from nightly.link, which hands the
         // download on where the mirror carries it: a build taken as it is
         // fails where the same build through the way the page chose came.
-        _ => Ok(ManagerPlan { name: "manager.zip".to_string(), url: releases::through(mirror, &releases::nightly(variant)) }),
+        _ => Ok(ManagerPlan {
+            name: "manager.zip".to_string(),
+            url: match tier {
+                Tier::Dev => releases::nightly_via(variant, proxy),
+                Tier::Stable => releases::through(mirror, &releases::nightly(variant)),
+            },
+        }),
     }
 }
 

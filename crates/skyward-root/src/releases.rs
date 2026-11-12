@@ -90,7 +90,18 @@ pub fn nightly(variant: Variant) -> String {
         Variant::SukiSu => ("build-manager.yml", "Manager.zip"),
         Variant::BakaSu => ("build-manager.yml", "Manager-release.zip"),
     };
-    format!("{DEV_PROXY}https://nightly.link/{}/workflows/{workflow}/main/{package}", variant.repo())
+    format!("https://nightly.link/{}/workflows/{workflow}/main/{package}", variant.repo())
+}
+
+/// Where the package a workflow built is fetched from by the way at `proxy`
+/// of the ways a development build offers: the address itself, or the one
+/// machine here that reaches it.
+pub fn nightly_via(variant: Variant, proxy: usize) -> String {
+    let at = nightly(variant);
+    match proxy {
+        0 => at,
+        _ => format!("{DEV_PROXY}{at}"),
+    }
 }
 
 impl Variant {
