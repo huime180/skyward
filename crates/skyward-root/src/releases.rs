@@ -35,6 +35,13 @@ pub fn downloaded() -> Vec<std::path::PathBuf> {
         if !path.to_string_lossy().to_ascii_lowercase().ends_with(".apk") {
             continue;
         }
+        // A download that stopped short is still named as the package it
+        // was meant to be: what does not open as a package is taken away, so
+        // that it is asked for again rather than handed over.
+        if !whole(&path) {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
         let at = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
         found.push((at, path));
     }
@@ -218,3 +225,13 @@ mod tests {
         assert!(Variant::SukiSu.releases().contains("SukiSU-Ultra"));
     }
 }
+
+/// Whether the package at `path` opens as one: a file that stopped short
+/// has no directory at its end.
+pub fn whole(path: &std::path::Path) -> bool {
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|file| zip::ZipArchive::new(file).ok())
+        .is_some_and(|zip| !zip.is_empty())
+}
+

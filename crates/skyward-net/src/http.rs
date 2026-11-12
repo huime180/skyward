@@ -18,7 +18,7 @@ const CONNECT: Duration = Duration::from_secs(15);
 
 /// How long a connection may go without a byte either way before it is
 /// taken as lost: a download read as it comes has no end to wait for.
-const STALL: Duration = Duration::from_secs(30);
+const STALL: Duration = Duration::from_secs(90);
 
 #[derive(Debug)]
 struct Lookup(Servers);
