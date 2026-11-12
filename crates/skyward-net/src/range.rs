@@ -28,7 +28,7 @@ impl Ranged {
     pub fn open(agent: &ureq::Agent, url: &str) -> Result<Ranged> {
         let mut at = url.to_string();
         for _ in 0..6 {
-            let mut response = agent
+            let response = agent
                 .get(&at)
                 .header("Range", "bytes=0-0")
                 .config()

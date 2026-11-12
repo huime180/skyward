@@ -961,7 +961,12 @@ struct ManagerPlan {
 
 /// A manager's address being looked up, as the release it comes from tells
 /// it.
-type PlanSlot = std::sync::Arc<std::sync::Mutex<Option<Result<ManagerPlan, String>>>>;
+/// A look-up under way: where its answer is put, and the flag that tells it
+/// to stop.
+struct PlanSlot {
+    slot: std::sync::Arc<std::sync::Mutex<Option<Result<ManagerPlan, String>>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
 
 /// A manager's package coming down on its own thread, and the flag that
 /// stops it.
@@ -977,31 +982,36 @@ type ManagerDownload = (
 fn start_manager_plan(servers: Servers, at: usize, proxy: usize) -> PlanSlot {
     let plan = std::sync::Arc::new(std::sync::Mutex::new(None));
     let held = plan.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopped = stop.clone();
     std::thread::Builder::new()
         .name("manager-plan".into())
         .spawn(move || {
-            let said = manager_plan(&servers, at, proxy).map_err(|e| format!("{e:#}"));
+            let said = manager_plan(&servers, at, proxy, &stopped).map_err(|e| format!("{e:#}"));
+            // A look-up the page let go of says nothing when it is done.
+            if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             if let Ok(mut slot) = held.lock() {
                 *slot = Some(said);
             }
         })
         .expect("the plan thread starts");
-    plan
+    PlanSlot { slot: plan, stop }
 }
 
 /// Ask the release the manager and tier at `at` comes from where its package
 /// is, and nothing of the package itself: the worker the update page
 /// downloads with fetches that.
-fn manager_plan(servers: &Servers, at: usize, proxy: usize) -> Result<ManagerPlan> {
+fn manager_plan(servers: &Servers, at: usize, proxy: usize, stop: &std::sync::atomic::AtomicBool) -> Result<ManagerPlan> {
     use skyward_root::releases::{self, Tier, Variant};
     let all = Variant::all();
     let (variant, tier) = *all.get(at).context("the list holds no such manager")?;
     let agent = skyward_net::http::agent(servers.clone());
-    let stop = std::sync::atomic::AtomicBool::new(false);
     let work = Path::new("/tmp/root");
     std::fs::create_dir_all(work).with_context(|| format!("create {}", work.display()))?;
     let fetch = |url: &str, path: &Path| -> Result<()> {
-        skyward_net::download::fetch(&agent, url, path, &skyward_net::download::Sum::Md5(String::new()), &stop, &mut |_| {})
+        skyward_net::download::fetch(&agent, url, path, &skyward_net::download::Sum::Md5(String::new()), stop, &mut |_| {})
     };
     // The way to GitHub the page chose, and no other: what a phone reaches
     // through one it does not reach through another.
@@ -2057,7 +2067,8 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         }
         // A download under way tells its own progress, and its end turns the
         // page into the one that patches with what it brought.
-        if let Some(slot) = &manager_plan {
+        if let Some(plan) = &manager_plan {
+            let slot = &plan.slot;
             let said = slot.lock().ok().and_then(|mut held| held.take());
             if let Some(said) = said {
                 manager_plan = None;
@@ -2085,20 +2096,15 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                             *held = Some(p);
                                         }
                                     };
+                                    skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
+                                        .map_err(|e| format!("{e:#}"))?;
                                     // A workflow hands its build out as an archive
-                                    // of packages: the one for this phone is read
-                                    // out of the archive where it lies, and only
-                                    // what that package takes is downloaded.
-                                    // A server that cannot be read in parts is
-                                    // taken whole, and the package is found in
-                                    // the archive once it is here.
-                                    let took = skyward_net::range::take(&agent, &url, "arm64", &at).unwrap_or_else(|e| {
-                                        let _ = skyward_sys::kmsg(&format!("root: reading the archive in parts failed: {e:#}"));
-                                        false
-                                    });
-                                    if !took {
-                                        skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
-                                            .map_err(|e| format!("{e:#}"))?;
+                                    // of packages: the one for this phone is taken
+                                    // out of it, and kept where the archive was.
+                                    let dir = at.parent().unwrap_or(std::path::Path::new("."));
+                                    let apk = skyward_root::apk::expand(&at, dir).map_err(|e| format!("{e:#}"))?;
+                                    if apk != at {
+                                        std::fs::rename(&apk, &at).map_err(|e| format!("{e:#}"))?;
                                     }
                                     Ok(())
                                 })
@@ -3135,6 +3141,9 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         // Nothing is coming down: the page is told, and the
                         // look-up still under way is let go of.
                         (None, None) => {
+                            if let Some(plan) = &manager_plan {
+                                plan.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                             manager_plan = None;
                             app.download_ended(DownloadEnd::Stopped, Have::Nothing, now);
                         }
