@@ -2085,15 +2085,14 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                             *held = Some(p);
                                         }
                                     };
-                                    skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
-                                        .map_err(|e| format!("{e:#}"))?;
-                                    // A workflow hands out an archive of packages:
-                                    // the package inside is what is kept, where
-                                    // the archive was.
-                                    let dir = at.parent().unwrap_or(std::path::Path::new("."));
-                                    let apk = skyward_root::apk::expand(&at, dir).map_err(|e| format!("{e:#}"))?;
-                                    if apk != at {
-                                        std::fs::rename(&apk, &at).map_err(|e| format!("{e:#}"))?;
+                                    // A workflow hands its build out as an archive
+                                    // of packages: the one for this phone is read
+                                    // out of the archive where it lies, and only
+                                    // what that package takes is downloaded.
+                                    let took = skyward_net::range::take(&agent, &url, "arm64", &at).map_err(|e| format!("{e:#}"))?;
+                                    if !took {
+                                        skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
+                                            .map_err(|e| format!("{e:#}"))?;
                                     }
                                     Ok(())
                                 })
