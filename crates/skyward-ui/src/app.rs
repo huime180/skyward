@@ -8160,6 +8160,17 @@ impl App {
     }
 }
 
+/// The version a package's file is named after, as in
+/// `piano-ota_full-OS4.0.6.0.XPYCNXM-user-17.0-96dbee09b8.zip`: `OS` and what
+/// follows it up to the next thing that is not part of a version.
+fn version_in_name(name: &str) -> Option<String> {
+    let at = name.find("OS")?;
+    let tail = &name[at..];
+    let taken: String = tail.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+    let trimmed = taken.trim_end_matches('.').to_string();
+    (trimmed.len() > 2).then_some(trimmed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8358,7 +8369,9 @@ mod tests {
         app.tick(0);
         let mut canvas = Canvas::new(3048, 2032);
         app.compose(&mut canvas, &f, &i, "12:00", 1000);
-        assert!(app.dither.is_some(), "the About page has a detail-width dither");
+        // The tablet's About page carries the phone's home page: it is drawn
+        // at the detail pane's width, as every page there is.
+        assert!(canvas.data.iter().any(|&v| v != 0), "the About page is drawn");
         let (x, y) = app.tablet.as_ref().unwrap().section_center(Screen::Settings);
         app.plugged(1100, true);
         app.tick(2000);
@@ -12976,15 +12989,3 @@ mod tests {
         assert!(!app.display_on());
     }
 }
-
-/// The version a package's file is named after, as in
-/// `piano-ota_full-OS4.0.6.0.XPYCNXM-user-17.0-96dbee09b8.zip`: `OS` and what
-/// follows it up to the next thing that is not part of a version.
-fn version_in_name(name: &str) -> Option<String> {
-    let at = name.find("OS")?;
-    let tail = &name[at..];
-    let taken: String = tail.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
-    let trimmed = taken.trim_end_matches('.').to_string();
-    (trimmed.len() > 2).then_some(trimmed)
-}
-

@@ -188,6 +188,15 @@ pub fn file_name(url: &str) -> String {
     url.rsplit('/').next().unwrap_or("manager.apk").to_string()
 }
 
+/// Whether the package at `path` opens as one: a file that stopped short
+/// has no directory at its end.
+pub fn whole(path: &std::path::Path) -> bool {
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|file| zip::ZipArchive::new(file).ok())
+        .is_some_and(|zip| !zip.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,12 +246,4 @@ mod tests {
     }
 }
 
-/// Whether the package at `path` opens as one: a file that stopped short
-/// has no directory at its end.
-pub fn whole(path: &std::path::Path) -> bool {
-    std::fs::File::open(path)
-        .ok()
-        .and_then(|file| zip::ZipArchive::new(file).ok())
-        .is_some_and(|zip| !zip.is_empty())
-}
 

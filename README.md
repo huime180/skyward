@@ -90,7 +90,9 @@ read and set properties.
 | Device | Codename | Tested system version |
 | --- | --- | --- |
 | Xiaomi 17 Ultra | `nezha` | OS4.0.4.0.XPACNXM (Android 17) |
+| Redmi K100 Pro Max | `songyuan` | OS4.0.5.0.XGNCNXM (Android 17) |
 | Xiaomi 13 Ultra | `ishtar` | OS3.0.308.0.WMACNXM (Android 16) |
+| Xiaomi Pad 8 Pro | `piano` | OS4.0.5.0.XPYCNXM (Android 17) |
 
 ### 🚧 Under construction
 
@@ -118,7 +120,6 @@ the data partition.
 | 🚧 REDMI K90 Pro Max | `myron` | OS4.0.4.0.XPMCNXM (Android 17) |
 | 🚧 REDMI K90 Ultra | `warsaw` | OS3.0.309.0.WHPCNXM (Android 16) |
 | 🚧 REDMI K100 Pro | `athens` | OS4.0.4.0.XPICNXM (Android 17) |
-| 🚧 REDMI K100 Pro Max | `songyuan` | OS4.0.4.0.XGNCNXM (Android 17) |
 
 ## Installing Skyward
 
