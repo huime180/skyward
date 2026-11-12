@@ -2089,7 +2089,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                                     // of packages: the one for this phone is read
                                     // out of the archive where it lies, and only
                                     // what that package takes is downloaded.
-                                    let took = skyward_net::range::take(&agent, &url, "arm64", &at).map_err(|e| format!("{e:#}"))?;
+                                    // A server that cannot be read in parts is
+                                    // taken whole, and the package is found in
+                                    // the archive once it is here.
+                                    let took = skyward_net::range::take(&agent, &url, "arm64", &at).unwrap_or_else(|e| {
+                                        let _ = skyward_sys::kmsg(&format!("root: reading the archive in parts failed: {e:#}"));
+                                        false
+                                    });
                                     if !took {
                                         skyward_net::download::fetch(&agent, &url, &at, &sum, &stopped, &mut told)
                                             .map_err(|e| format!("{e:#}"))?;

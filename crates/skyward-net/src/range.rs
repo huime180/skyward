@@ -21,16 +21,47 @@ pub struct Ranged {
 }
 
 impl Ranged {
-    /// The package at `url`, whose length the server is asked for.
+    /// The package at `url`, whose length the server is asked for: the way
+    /// to it may be a jump from the machine that hands it out to the store
+    /// that keeps it, and each jump is taken here so that the bytes after it
+    /// are read from where the package lies.
     pub fn open(agent: &ureq::Agent, url: &str) -> Result<Ranged> {
-        let head = agent.head(url).call().with_context(|| format!("ask {url}"))?;
-        let len = head
-            .headers()
-            .get(ureq::http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-            .with_context(|| format!("{url} says no length"))?;
-        Ok(Ranged { agent: agent.clone(), url: url.to_string(), len, at: 0, block_at: 0, block: Vec::new() })
+        let mut at = url.to_string();
+        for _ in 0..6 {
+            let mut response = agent
+                .get(&at)
+                .header("Range", "bytes=0-0")
+                .config()
+                .max_redirects(0)
+                .build()
+                .call()
+                .with_context(|| format!("ask {at}"))?;
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                let location = response
+                    .headers()
+                    .get(ureq::http::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .with_context(|| format!("{at} answered {status} and names no address"))?
+                    .to_string();
+                at = towards(&at, &location);
+                continue;
+            }
+            if status != 200 && status != 206 {
+                bail!("{at} answered {status}");
+            }
+            let headers = response.headers();
+            let whole = headers
+                .get(ureq::http::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.rsplit('/').next().map(str::to_string))
+                .and_then(|value| value.trim().parse::<u64>().ok());
+            let len = whole
+                .or_else(|| headers.get(ureq::http::header::CONTENT_LENGTH).and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u64>().ok()))
+                .with_context(|| format!("{at} says no length"))?;
+            return Ok(Ranged { agent: agent.clone(), url: at, len, at: 0, block_at: 0, block: Vec::new() });
+        }
+        bail!("{url} jumps too often to follow")
     }
 
     /// Read the block holding `at`, so that what falls in it is served from
@@ -102,6 +133,17 @@ impl Seek for Ranged {
         self.at = at as u64;
         Ok(self.at)
     }
+}
+
+/// `location` as an address, taken against `base` where it names a way on
+/// the same machine.
+fn towards(base: &str, location: &str) -> String {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return location.to_string();
+    }
+    let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
+    let host = rest.split('/').next().unwrap_or(rest);
+    format!("{scheme}://{host}{location}")
 }
 
 /// Take the file of `url` whose name holds `word` into `out`, reading only
