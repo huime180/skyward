@@ -24,7 +24,6 @@ mod keys;
 #[cfg(target_os = "android")]
 mod merge;
 #[cfg(any(target_os = "android", test))]
-mod orientation;
 #[cfg(target_os = "android")]
 mod partwork;
 #[cfg(target_os = "android")]
@@ -440,9 +439,6 @@ fn main() -> Result<()> {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
             let cfg = DeviceConfig::load(&config)?;
-            if let Some(orientation) = &cfg.orientation {
-                orientation::prepare(orientation)?;
-            }
             let services: Vec<Started> = cfg.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
@@ -744,11 +740,6 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     let libraries = secure::libraries()?;
     if let Some(dir) = &libraries {
         skyward_sys::kmsg(&format!("the phone's own libraries are at {}", dir.display()))?;
-    }
-    if let Some(orientation) = &cfg.orientation {
-        if let Err(e) = orientation::prepare(orientation) {
-            skyward_sys::kmsg(&format!("orientation services not prepared: {e:#}"))?;
-        }
     }
     services::start(&services, libraries.as_deref())?;
     let steps = found.context("make out from the phone's partitions how its keys are used")?;

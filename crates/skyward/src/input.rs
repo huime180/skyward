@@ -238,13 +238,12 @@ impl Inputs {
     /// power, volume or back key as buttons. A panel taken in is told what
     /// the device description writes to the touchscreen.
     fn scan(&mut self) -> Result<()> {
-        if let Some(panel) = &self.panel {
-            if !panel.path.exists() {
+        if let Some(panel) = &self.panel
+            && !panel.path.exists() {
                 eprintln!("input {}: gone", panel.path.display());
                 self.seen.remove(&panel.path);
                 self.panel = None;
             }
-        }
         for (path, dev) in evdev::raw_stream::enumerate() {
             if !self.seen.insert(path.clone()) {
                 continue;
@@ -280,19 +279,6 @@ impl Inputs {
         Ok(())
     }
 
-    /// Tell the touchscreen again what its panel takes, as taking it in did:
-    /// a driver that slept with the panel is woken by the same words.
-    pub fn rearm(&mut self) -> Result<()> {
-        let mut told = Vec::new();
-        for w in &self.touch.writes {
-            match fs::write(&w.path, &w.value) {
-                Ok(()) => told.push(format!("{}={}", w.path, w.value)),
-                Err(e) => eprintln!("arm {} with {}: {e}", w.path, w.value),
-            }
-        }
-        skyward_sys::kmsg(&format!("touchscreen told again: {}", told.join(" ")))?;
-        Ok(())
-    }
 
     /// Empty the watch's queue; true when /dev/input changed.
     fn changed(&self) -> Result<bool> {
