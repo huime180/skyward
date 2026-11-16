@@ -148,9 +148,13 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         }
         _ => {}
     }
-    let room = skyward_block::mount::space(dir).with_context(|| format!("read the free space of {}", dir.display()))?.available;
-    if total - have > room {
-        bail!(NoRoom { needed: total - have, free: room });
+    // What the package still takes is known where the server said how long
+    // it is: a server that says nothing of it is asked to send it whole.
+    if let Some(total) = total {
+        let room = skyward_block::mount::space(dir).with_context(|| format!("read the free space of {}", dir.display()))?.available;
+        if total - have > room {
+            bail!(NoRoom { needed: total - have, free: room });
+        }
     }
     let mut hash = hash_of::<D>(&mut file, have, stop, progress)?;
     if total.is_none() || have < total.unwrap_or(0) {

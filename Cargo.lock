@@ -72,9 +72,24 @@ dependencies = [
 
 [[package]]
 name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-no-stdlib"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib 2.0.4",
+]
 
 [[package]]
 name = "alloc-stdlib"
@@ -82,7 +97,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
 dependencies = [
- "alloc-no-stdlib",
+ "alloc-no-stdlib 3.0.0",
 ]
 
 [[package]]
@@ -286,13 +301,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli"
+version = "8.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
+dependencies = [
+ "alloc-no-stdlib 2.0.4",
+ "alloc-stdlib 0.2.4",
+ "brotli-decompressor 5.0.3",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib 2.0.4",
+ "alloc-stdlib 0.2.4",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28a996bd762f99a48a3aebaa662ff203cc4fb388706eff2e88e7cb459d013a62"
 dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
+ "alloc-no-stdlib 3.0.0",
+ "alloc-stdlib 0.3.0",
 ]
 
 [[package]]
@@ -340,6 +376,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
 dependencies = [
  "libbz2-rs-sys",
+]
+
+[[package]]
+name = "bzip2-rs"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beeb59e7e4c811ab37cc73680c798c7a5da77fc9989c62b09138e31ee740f735"
+dependencies = [
+ "crc32fast",
+ "tinyvec",
 ]
 
 [[package]]
@@ -2384,6 +2430,7 @@ dependencies = [
  "skyward-net",
  "skyward-omapi",
  "skyward-programs",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-ui",
@@ -2495,20 +2542,25 @@ version = "0.3.1"
 dependencies = [
  "abootimg-oxide",
  "anyhow",
+ "brotli",
+ "bzip2-rs",
  "cms",
  "cpio",
  "flate2",
  "libc",
  "lz4_flex 0.14.0",
+ "lzma-rs",
  "p256",
  "polyfuse-kernel",
  "rsa",
+ "ruzstd",
  "sha1 0.10.7",
  "sha2 0.10.9",
  "skyward-block",
  "skyward-bootimg",
  "skyward-config",
  "skyward-info",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-vab",
@@ -2570,6 +2622,7 @@ dependencies = [
  "sha2 0.10.9",
  "skyward-block",
  "ureq",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -2629,6 +2682,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "skyward-root"
+version = "0.3.1"
+dependencies = [
+ "anyhow",
+ "libc",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "skyward-vab",
+ "tempfile",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "skyward-sys"
 version = "0.3.1"
 dependencies = [
@@ -2685,9 +2751,11 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "skyward-config",
  "skyward-info",
  "skyward-install",
  "skyward-net",
+ "skyward-root",
  "skyward-systems",
  "skyward-vab",
  "svgtypes",
@@ -3041,7 +3109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3dd952df6789d45fe9c89e2d0a6dba96d49e14b9f76adc77d305a7fce9763ebd"
 dependencies = [
  "blake2",
- "brotli-decompressor",
+ "brotli-decompressor 6.1.1",
  "bzip2",
  "crc32fast",
  "liblzma",
