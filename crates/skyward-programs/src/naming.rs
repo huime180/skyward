@@ -111,6 +111,8 @@ fn run(phone: &Phone, command: &[String]) -> Result<Started> {
         ready_property: None,
         ready_service: None,
         registers: Vec::new(),
+        mounts: Vec::new(),
+        environment: std::collections::HashMap::new(),
         ready_hardware_service: None,
         when: None,
         user: as_whom.get(1).cloned(),

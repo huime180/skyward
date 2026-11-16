@@ -2815,9 +2815,10 @@ pub fn module_info(cx: &Ctx) -> Frame {
     let listed = widgets::list(&mut c, t, f, y + t.m.card_gap, &rows);
     let second = if module.removed { Action::RestoreModule(at) } else { Action::RemoveModule(at) };
     out.extend(hits(&listed.rows, &[Action::Toggle(Switch::Module(at)), second]));
-    // The page is named after the module it shows, rather than after the
-    // list it was opened from.
-    Frame { title: title.into(), ..Frame::new(t, c, out, l.pick(MODULES), top) }
+    // The page is named after the list it was opened from; the module's own
+    // name stands in its own card, where a title cannot hold it.
+    let _ = title;
+    Frame::new(t, c, out, l.pick(MODULES), top)
 }
 
 /// Giving the data partition's files the SELinux labels the installed

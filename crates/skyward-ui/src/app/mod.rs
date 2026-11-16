@@ -33,6 +33,9 @@ use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan}
 use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
+/// How far the image being taken out of a package has come, if one is.
+static TAKING: std::sync::Mutex<Option<(String, u64, u64)>> = std::sync::Mutex::new(None);
+
 mod act;
 mod backup;
 mod decrypt;
@@ -49,6 +52,7 @@ mod nav;
 mod power;
 mod prefs;
 mod reboot;
+mod root;
 mod relabel;
 mod scroll;
 mod skyward;
@@ -71,6 +75,7 @@ pub use manager::*;
 pub use mount::*;
 pub use prefs::*;
 pub use reboot::*;
+pub use root::*;
 pub use relabel::*;
 pub use skyward::*;
 pub use state::*;
@@ -179,6 +184,31 @@ pub enum Screen {
     /// The WLAN switch, the network chosen and how joining it goes, and
     /// the networks in range.
     Wlan,
+    /// The partitions an install keeps as they are, a switch each.
+    Keep,
+    /// Patching the boot image the phone's root manager patches.
+    Root,
+    /// Downloading a root manager's package from its releases.
+    RootDownload,
+    /// What a patch with the package chosen would do, and the swipe that
+    /// does it.
+    RootConfirm,
+    /// The managers the data partition holds, which a patch can run.
+    RootInstalled,
+    /// The partitions an image of the phone's own is written to.
+    RootDirect,
+    /// The ways to a manager, and to an image.
+    RootManagers,
+    RootImages,
+    /// The images taken out of a system package, to pick one of.
+    PackageImages,
+    /// The modules the phone's root manager has.
+    Modules,
+    /// One module: what it says of itself, and what can be done with it.
+    ModuleInfo,
+    /// The proxy every request goes through, typed where a network's own
+    /// details stand.
+    Proxy,
     /// The password of the network chosen, typed on the screen's keyboard.
     WlanPassword,
     /// The network joined, and the address and the rest it gave.
@@ -221,6 +251,9 @@ pub enum Confirm {
     SwitchSystem,
     /// Take the other system away.
     RemoveSystem,
+    /// Patch the image chosen with the manager chosen, and write it into the
+    /// partition or leave it as a file.
+    PatchRoot,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
 }
@@ -382,6 +415,34 @@ pub enum Action {
     UpdateSkyward,
     /// Stop downloading the build.
     StopSkywardUpdate,
+    /// Open the page that patches the boot image, with the manager chosen
+    /// for it.
+    OpenPatchImage,
+    /// Open the images a system package holds.
+    OpenPackages,
+    /// Write an image of the phone's own into the partition chosen.
+    OpenDirect,
+    /// Open the module at this place in the list.
+    OpenModule(usize),
+    /// Have the manager take the module at this place away.
+    RemoveModule(usize),
+    /// Have the manager take the module at this place again, as it was.
+    RestoreModule(usize),
+    /// Download the manager's package the page offers, the way and tier by
+    /// their place.
+    DownloadManager(usize),
+    /// Patch a root image with the package at this place in the list.
+    RootPackage(usize),
+    /// Take the images out of the system package chosen.
+    OpenSystemPackage,
+    /// Take every partition of the system package out, to flash on its own.
+    OpenPackageParts,
+    /// Choose one of the images taken out of a package.
+    PickPackageImage(usize),
+    /// Flash the image taken out of a package.
+    FlashTaken,
+    /// Type the proxy the downloads go through.
+    OpenProxy,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
 }
@@ -1278,6 +1339,11 @@ impl App {
 
     pub fn screen(&self) -> Screen {
         self.top().0
+    }
+
+    /// Which of the tablet's sections the page it shows belongs to.
+    pub(crate) fn tablet_selection(&self) -> Screen {
+        self.stack.iter().map(|p| p.0).find(|&s| crate::tablet::is_section(s)).unwrap_or(Screen::About)
     }
 
     fn top(&self) -> &(Screen, f32, Focus) {

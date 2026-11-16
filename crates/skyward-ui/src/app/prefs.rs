@@ -27,6 +27,26 @@ pub enum Switch {
     /// over.
     KeepRecovery,
     Wlan,
+    /// The tablet's page turns with the device.
+    AutoRotate,
+    /// An install writes the patched image into the slot it leaves unused.
+    KeepRoot,
+    /// Keep the partition at this place in the list as it is when an install
+    /// writes over the slot.
+    Keep(usize),
+    /// Turn the module at this place in the list on or off.
+    Module(usize),
+    /// Write the image the partition at this place in the list holds.
+    RootPartition(usize),
+    /// Choose the manager or the tier the download page offers, by its place.
+    PickVariant(usize),
+    PickTier(usize),
+    /// Choose the way to GitHub the downloads take, by its place.
+    PickProxy(usize),
+    /// Which manager a patch runs with, by its place in the list.
+    RootManager(usize),
+    /// Where the patcher a patch runs comes from, by its place in the list.
+    RootSource(usize),
     /// Show the password typed rather than a dot for each character.
     ShowPassword,
 }

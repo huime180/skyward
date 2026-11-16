@@ -37,6 +37,69 @@ pub struct State {
     /// How far the swipe-to-confirm knob is dragged, 0 to 1.
     pub confirm: f32,
     pub install: Install,
+    /// A tablet's own layout: two panes, and the pages of its sidebar.
+    pub tablet: bool,
+    /// The tablet's page turns with the device, where the phone's panels say
+    /// which way it is held.
+    pub auto_rotate: bool,
+    /// What the panels say of which way it is held was read.
+    pub sensors: bool,
+    /// Which way the pages are drawn: the panels' or the device's own.
+    pub rotation: crate::rotation::Rotation,
+    /// Which of the managers the download page offers is chosen.
+    pub root_variant: usize,
+    /// Whether it is the newest build of one or the release.
+    pub root_tier: usize,
+    /// The way to GitHub the page's downloads take.
+    pub root_proxy: usize,
+    /// The managers the data partition holds, read as their pages open.
+    pub root_apps: Option<Vec<skyward_root::installed::App>>,
+    /// An install writes the patched image into the slot it leaves unused.
+    pub keep_root: bool,
+    /// The partitions an install leaves as they are.
+    pub keep_partitions: Vec<String>,
+    /// The manager a patch runs with, as the page last wrote of it.
+    pub root_manager: Option<String>,
+    /// What patching ended with, as the page tells it.
+    pub root_said: Option<String>,
+    /// Which partition an image of the phone's own is written to.
+    pub root_partition: Option<&'static str>,
+    /// Where the image a patch writes comes from.
+    pub root_image: RootImage,
+    /// Which of a root page's files is being picked.
+    pub root_pick: Option<RootPick>,
+    /// What the images taken out of a package are on show for.
+    pub package_mode: Option<PackageMode>,
+    /// The package taken apart: its file, and how much is done, in all, of
+    /// it and of what came out.
+    pub package_file: Option<(String, u64, u64, u64)>,
+    /// The images the package holds, and how long each is.
+    pub package_list: Option<Vec<(String, u64)>>,
+    /// The image taken out of a package, waiting to be flashed.
+    pub pending_flash: Option<String>,
+    /// What taking an image out of a package ended with.
+    pub package_said: Option<String>,
+    /// The version the package's own file name says.
+    pub package_version: Option<String>,
+    /// The network typed on the WLAN page, kept to be joined when the page
+    /// is left.
+    pub saved_try: Option<skyward_net::wlan::Network>,
+    /// The way to a manager the page took.
+    pub root_manager_way: ManagerWay,
+    /// The way to an image the page took.
+    pub root_image_way: ImageWay,
+    /// The images taken out of a package, and which manager each holds.
+    pub root_images: Option<Vec<(String, Option<skyward_root::apk::Kind>)>>,
+    /// Where the patcher a patch runs comes from.
+    pub root_source: RootSource,
+    /// Which module of the manager's the page shows.
+    pub module: Option<usize>,
+    /// The modules the manager has, read as their page opens.
+    pub modules: Option<Vec<skyward_root::modules::Module>>,
+    /// The proxy typed on the network page, as it stands.
+    pub proxy_text: String,
+    /// The phone's motor is one the recovery can tap.
+    pub supports_vibration: bool,
     /// Where the package being installed comes from.
     pub source: Source,
     /// The name of the file being installed, when it is one on the phone.
@@ -186,6 +249,37 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
+            tablet: false,
+            auto_rotate: false,
+            sensors: false,
+            rotation: crate::rotation::Rotation::Native,
+            root_variant: 0,
+            root_tier: 0,
+            root_proxy: 1,
+            root_apps: None,
+            keep_root: true,
+            keep_partitions: Vec::new(),
+            root_manager: None,
+            root_said: None,
+            root_partition: None,
+            root_image: RootImage::Partition,
+            root_pick: None,
+            package_mode: None,
+            package_file: None,
+            package_list: None,
+            pending_flash: None,
+            package_said: None,
+            package_version: None,
+            saved_try: None,
+            root_manager_way: ManagerWay::None,
+            root_image_way: ImageWay::Direct,
+            root_images: None,
+            root_source: RootSource::Installed,
+            module: None,
+            modules: None,
+            proxy_text: String::new(),
+            supports_vibration: false,
+
             lang: Lang::Hans,
             language_chosen: false,
             dark: false,

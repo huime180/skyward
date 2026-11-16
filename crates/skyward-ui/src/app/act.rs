@@ -7,6 +7,22 @@ impl App {
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            // 这些页面还没从旧的单一状态机搬过来：先明说，不假装做了。
+            Action::OpenPatchImage
+            | Action::OpenPackages
+            | Action::OpenDirect
+            | Action::OpenModule(_)
+            | Action::RemoveModule(_)
+            | Action::RestoreModule(_)
+            | Action::DownloadManager(_)
+            | Action::RootPackage(_)
+            | Action::OpenSystemPackage
+            | Action::OpenPackageParts
+            | Action::PickPackageImage(_)
+            | Action::FlashTaken
+            | Action::OpenProxy => {
+                self.say(l.pick(["这个页面还在移植中", "這個頁面還在移植中", "this page is still being ported"]), now);
+            }
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
@@ -58,6 +74,13 @@ impl App {
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
                     Switch::ShowPassword => &mut self.state.show_password,
                     Switch::Wlan => unreachable!("the WLAN switch is turned above"),
+                    Switch::AutoRotate => &mut self.state.auto_rotate,
+                    Switch::KeepRoot => &mut self.state.keep_root,
+                    // 其余由各自的页面处理，这里不动。
+                    Switch::Keep(_) | Switch::Module(_) | Switch::RootPartition(_) | Switch::PickVariant(_) | Switch::PickTier(_) | Switch::PickProxy(_) | Switch::RootManager(_) | Switch::RootSource(_) => {
+                        return Vec::new();
+                    }
+
                 };
                 *on = !*on;
                 let now_on = *on;
@@ -701,6 +724,7 @@ impl App {
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::PatchRoot => self.say(l.pick(["修补还在移植中", "修補還在移植中", "patching is still being ported"]), now),
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
