@@ -8369,9 +8369,7 @@ mod tests {
         app.tick(0);
         let mut canvas = Canvas::new(3048, 2032);
         app.compose(&mut canvas, &f, &i, "12:00", 1000);
-        // The tablet's About page carries the phone's home page: it is drawn
-        // at the detail pane's width, as every page there is.
-        assert!(canvas.data.iter().any(|&v| v != 0), "the About page is drawn");
+        assert!(app.dither.is_some(), "the About page has a detail-width dither");
         let (x, y) = app.tablet.as_ref().unwrap().section_center(Screen::Settings);
         app.plugged(1100, true);
         app.tick(2000);

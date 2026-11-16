@@ -61,12 +61,6 @@ pub struct Band {
 }
 
 pub fn render(screen: Screen, cx: &Ctx) -> Frame {
-    // A tablet's detail pane shows the home page itself for its own page, so
-    // that what asks to be done — a low battery, a restart waiting, an update
-    // to merge — is said there as it is said on a phone.
-    if cx.state.tablet && screen == Screen::About {
-        return home(cx);
-    }
     match screen {
         Screen::Decrypt => decrypt(cx),
         Screen::Home => home(cx),
