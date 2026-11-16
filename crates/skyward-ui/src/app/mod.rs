@@ -80,6 +80,7 @@ pub use mount::*;
 pub use prefs::*;
 pub use reboot::*;
 pub use root::*;
+pub use root_act::taken;
 pub use relabel::*;
 pub use skyward::*;
 pub use state::*;

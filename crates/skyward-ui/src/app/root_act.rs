@@ -63,7 +63,7 @@ impl App {
     }
 
     /// The image taken out of a package, once it is out.
-    pub(crate) fn package_taken(&mut self, taken: Result<String, String>) {
+    pub fn package_taken(&mut self, taken: Result<String, String>) {
         match taken {
             Ok(path) => {
                 self.state.package_said = Some(path.clone());
@@ -85,4 +85,19 @@ impl App {
         self.state.sensors = cfg.orientation.is_some();
         self.refresh();
     }
+}
+
+impl App {
+    /// Read the modules the phone's root manager has, and keep them for the
+    /// page that lists them.
+    pub(crate) fn read_modules(&mut self) {
+        let dir = std::path::Path::new(skyward_root::modules::MODULES);
+        self.state.modules = skyward_root::modules::list(dir).ok();
+    }
+}
+
+/// The image taken out of a package, once it is out, for the loop to hand
+/// to the page.
+pub fn taken() -> Option<Result<String, String>> {
+    TAKEN.lock().ok().and_then(|mut held| held.take())
 }

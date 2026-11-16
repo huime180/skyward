@@ -42,6 +42,7 @@ mod settings;
 #[cfg(target_os = "android")]
 mod systems;
 #[cfg(target_os = "android")]
+mod root_work;
 mod ui;
 #[cfg(target_os = "android")]
 mod updates;

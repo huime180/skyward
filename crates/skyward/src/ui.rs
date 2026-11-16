@@ -1611,6 +1611,7 @@ impl<'a> Pages<'a> {
         self.updates_told(now)?;
         self.skyward_told(now)?;
         self.decrypt_told(now)?;
+        self.root_told(now);
         self.shell_told()?;
         self.take_in(drive_told, now)?;
         self.offer_storage(now)
@@ -2328,6 +2329,44 @@ impl Pages<'_> {
         Ok(())
     }
 
+    /// What the root pages' work ended with, once it has: a manager's
+    /// package downloaded, or a boot image patched.
+    fn root_told(&mut self, now: u64) {
+        // The managers installed on the phone are read as their pages open,
+        // and kept: reading them on every frame is what made the root pages
+        // slow to come up.
+        if matches!(self.app.screen(), Screen::Root | Screen::RootManagers) && self.app.state.root_apps.is_none() {
+            self.app.state.root_apps = Some(skyward_root::installed::installed().unwrap_or_default());
+            self.app.refresh();
+        }
+
+        if let Some(done) = crate::root_work::patched() {
+            let _ = now;
+            self.app.state.root_said = Some(match done {
+                Ok(said) => said,
+                Err(e) => format!("{e:#}"),
+            });
+            self.app.refresh();
+        }
+        if let Some(done) = crate::root_work::downloaded() {
+            match done {
+                Ok(path) => {
+                    self.app.state.root_said = Some(path);
+                    self.app.state.download = Some(skyward_ui::app::DownloadJob { progress: None, rate: 0, outcome: Some(skyward_ui::app::DownloadEnd::Downloaded), stopping: false });
+                }
+                Err(e) => {
+                    self.app.state.root_said = Some(format!("{e:#}"));
+                    self.app.state.download = None;
+                }
+            }
+            self.app.refresh();
+        }
+        if let Some(taken) = skyward_ui::app::taken() {
+            self.app.package_taken(taken);
+            self.app.refresh();
+        }
+    }
+
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
         let Some(ended) = self.decryptor.as_ref().and_then(Decryptor::ended) else { return Ok(()) };
@@ -2606,11 +2645,24 @@ impl Pages<'_> {
             }
             Effect::Wlan(on) => wlan_worker(&self.wlan)?.send(if on { wlan::Command::On } else { wlan::Command::Off }),
             // 这两个页面还在从旧的状态机往上游的结构里搬：先明说，不假装做了。
-            Effect::DownloadManager(_) => {
-                skyward_sys::kmsg("root: downloading a manager is not wired yet")?;
+            // A package comes down and a boot image is patched on threads of
+            // their own: the pages keep drawing while they do.
+            Effect::DownloadManager(at) => {
+                let servers = self.servers.clone();
+                let proxy = self.app.state.root_proxy;
+                std::thread::Builder::new()
+                    .name("manager-download".into())
+                    .spawn(move || crate::root_work::download_manager(servers, at, proxy))
+                    .context("start the download thread")?;
             }
             Effect::PatchRootImage => {
-                skyward_sys::kmsg("root: patching is not wired yet")?;
+                let partition = self.app.state.root_partition;
+                let source = self.app.state.root_source.clone();
+                let image = self.app.state.root_image.clone();
+                std::thread::Builder::new()
+                    .name("root-patch".into())
+                    .spawn(move || crate::root_work::patch_root(partition, source, image))
+                    .context("start the patch thread")?;
             }
 
             Effect::ScanWlan => {

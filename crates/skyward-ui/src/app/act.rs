@@ -7,21 +7,91 @@ impl App {
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
-            // 这些页面还没从旧的单一状态机搬过来：先明说，不假装做了。
-            Action::OpenPatchImage
-            | Action::OpenPackages
-            | Action::OpenDirect
-            | Action::OpenModule(_)
-            | Action::RemoveModule(_)
-            | Action::RestoreModule(_)
-            | Action::DownloadManager(_)
-            | Action::RootPackage(_)
-            | Action::OpenSystemPackage
-            | Action::OpenPackageParts
-            | Action::PickPackageImage(_)
-            | Action::FlashTaken
-            | Action::OpenProxy => {
-                self.say(l.pick(["这个页面还在移植中", "這個頁面還在移植中", "this page is still being ported"]), now);
+            Action::OpenPatchImage => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Image);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenDirect => {
+                self.open(Screen::RootDirect);
+            }
+            Action::OpenPackages => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Package);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenSystemPackage => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Package);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenPackageParts => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Parts);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenModule(at) => {
+                self.state.module = Some(at);
+                self.open(Screen::ModuleInfo);
+            }
+            Action::RemoveModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::uninstall(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::RestoreModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::restore(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::DownloadManager(at) => {
+                if !self.state.online() {
+                    self.open(Screen::Wlan);
+                    return self.arrive_at(Screen::Wlan);
+                }
+                if !self.state.downloading() {
+                    self.state.download = Some(DownloadJob { progress: None, rate: 0, outcome: None, stopping: false });
+                    self.refresh();
+                    return vec![Effect::DownloadManager(at)];
+                }
+            }
+            Action::RootPackage(at) => {
+                if let Some(path) = skyward_root::releases::downloaded().get(at) {
+                    let source = RootSource::Apk(path.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Storage, source);
+                }
+                self.refresh();
+            }
+            Action::PickPackageImage(at) => {
+                if crate::app::taking().is_some() {
+                    return Vec::new();
+                }
+                let listed = self.state.package_list.clone().unwrap_or_default();
+                let Some((name, _)) = listed.get(at).cloned() else { return Vec::new() };
+                self.package_take(&name);
+            }
+            Action::FlashTaken => {
+                if let Some(path) = self.state.pending_flash.take() {
+                    return vec![Effect::InstallPath(path)];
+                }
+            }
+            Action::OpenProxy => {
+                self.state.proxy_text = skyward_net::http::proxy().unwrap_or_default();
+                self.open(Screen::Proxy);
             }
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
@@ -724,7 +794,11 @@ impl App {
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
-            Confirm::PatchRoot => self.say(l.pick(["修补还在移植中", "修補還在移植中", "patching is still being ported"]), now),
+            Confirm::PatchRoot => {
+                self.state.root_said = None;
+                self.refresh();
+                fx.push(Effect::PatchRootImage);
+            }
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
