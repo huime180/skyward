@@ -34,6 +34,9 @@ use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 /// How far the image being taken out of a package has come, if one is.
+/// The image taken out of a package, once it is out.
+static TAKEN: std::sync::Mutex<Option<Result<String, String>>> = std::sync::Mutex::new(None);
+
 static TAKING: std::sync::Mutex<Option<(String, u64, u64)>> = std::sync::Mutex::new(None);
 
 mod act;
@@ -53,6 +56,7 @@ mod power;
 mod prefs;
 mod reboot;
 mod root;
+mod root_act;
 mod relabel;
 mod scroll;
 mod skyward;
@@ -650,6 +654,14 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    /// Download the manager's package the download page offers, the way and
+    /// tier by their place.
+    DownloadManager(usize),
+    /// Patch the image chosen with the manager chosen, and put it where the
+    /// page said.
+    PatchRootImage,
+    /// Take the image the package page names out of its package.
+    TakePackage(String),
 }
 
 enum Drag {
