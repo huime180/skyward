@@ -30,6 +30,7 @@ pub(super) fn info() -> DeviceInfo {
         kernel: "5.15.178".into(),
         storage: Storage { total: 496_550_785_024, free: None },
         battery: None,
+        battery_capacity_mah: None,
         slot: None,
         snapshot: SnapshotState::None,
         boot: Boot { unlocked: None, verified: None },

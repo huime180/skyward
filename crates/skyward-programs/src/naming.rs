@@ -154,6 +154,8 @@ mod tests {
             ready_property: None,
             ready_service: None,
             registers: Vec::new(),
+            mounts: Vec::new(),
+            environment: std::collections::HashMap::new(),
             ready_hardware_service: None,
             when: None,
             user: user.map(str::to_string),

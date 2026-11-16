@@ -329,12 +329,11 @@ pub fn known() -> Vec<Known> {
             ssid = Some(value.into_bytes());
             continue;
         }
-        if let Some(value) = setting(line, "PreSharedKey") {
-            if let Some(name) = ssid.take() {
-                if !value.is_empty() {
-                    out.push(Known { ssid: name, key: value });
-                }
-            }
+        if let Some(value) = setting(line, "PreSharedKey")
+            && let Some(name) = ssid.take()
+            && !value.is_empty()
+        {
+            out.push(Known { ssid: name, key: value });
         }
     }
     out

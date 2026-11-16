@@ -890,7 +890,7 @@ mod tests {
             [Write { path: "/sys/class/touch/touch_dev/enable_touch_raw".into(), value: "0".into() }],
             "its controller reports positions itself"
         );
-        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }));
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into(), remoteproc: None }));
         assert_eq!(cfg.partitions.mounted, ["persist"], "the secure world keeps its own files there");
         let [post_boot] = &cfg.services[..] else { panic!("one program: those that use the phone's keys are read from the phone's own partitions") };
         assert_eq!(post_boot.path, "/vendor/bin/sh");

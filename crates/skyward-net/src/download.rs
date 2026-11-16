@@ -182,10 +182,10 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
             if stop.load(Ordering::Relaxed) {
                 bail!(crate::Stopped);
             }
-            if let Some(total) = total {
-                if done >= total {
-                    break;
-                }
+            if let Some(total) = total
+                && done >= total
+            {
+                break;
             }
             let n = body.read(&mut buf).context("download the package")?;
             if n == 0 {

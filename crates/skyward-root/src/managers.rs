@@ -556,10 +556,10 @@ pub fn installed_in(root: &Path) -> Result<Vec<App>> {
         // `~~<hash>` folders the system groups them in.
         if name.starts_with("~~") {
             collect(&at, &mut found)?;
-        } else if let Some(package) = package_of(&name) {
-            if let Some(app) = app_of(&at, package) {
-                found.push(app);
-            }
+        } else if let Some(package) = package_of(&name)
+            && let Some(app) = app_of(&at, package)
+        {
+            found.push(app);
         }
     }
     found.sort_by(|a, b| a.package.cmp(&b.package));
@@ -581,10 +581,10 @@ fn collect(dir: &Path, found: &mut Vec<App>) -> Result<()> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(package) = package_of(&name) {
-            if let Some(app) = app_of(&at, package) {
-                found.push(app);
-            }
+        if let Some(package) = package_of(&name)
+            && let Some(app) = app_of(&at, package)
+        {
+            found.push(app);
         }
     }
     Ok(())
