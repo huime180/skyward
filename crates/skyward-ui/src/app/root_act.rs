@@ -76,3 +76,13 @@ impl App {
         }
     }
 }
+
+impl App {
+    /// Apply device capabilities before the first frame is drawn.
+    pub fn configure_device(&mut self, cfg: &skyward_config::DeviceConfig) {
+        self.state.supports_vibration = cfg.device.supports_vibration.unwrap_or(cfg.haptics.is_some());
+        self.state.tablet = cfg.device.tablet;
+        self.state.sensors = cfg.orientation.is_some();
+        self.refresh();
+    }
+}

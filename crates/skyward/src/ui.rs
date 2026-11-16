@@ -2605,6 +2605,14 @@ impl Pages<'_> {
                 self.merger = Some(merge::Merger::start(slot, true)?);
             }
             Effect::Wlan(on) => wlan_worker(&self.wlan)?.send(if on { wlan::Command::On } else { wlan::Command::Off }),
+            // 这两个页面还在从旧的状态机往上游的结构里搬：先明说，不假装做了。
+            Effect::DownloadManager(_) => {
+                skyward_sys::kmsg("root: downloading a manager is not wired yet")?;
+            }
+            Effect::PatchRootImage => {
+                skyward_sys::kmsg("root: patching is not wired yet")?;
+            }
+
             Effect::ScanWlan => {
                 self.scanned_at = Instant::now();
                 wlan_worker(&self.wlan)?.send(wlan::Command::Scan);

@@ -660,8 +660,6 @@ pub enum Effect {
     /// Patch the image chosen with the manager chosen, and put it where the
     /// page said.
     PatchRootImage,
-    /// Take the image the package page names out of its package.
-    TakePackage(String),
 }
 
 enum Drag {
