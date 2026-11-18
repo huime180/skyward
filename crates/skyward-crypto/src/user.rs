@@ -117,6 +117,12 @@ impl Lock {
     pub const PIN: i32 = 3;
     pub const PASSWORD: i32 = 4;
 
+    /// Whether `kind` names a lock a user sets and types: a phone with none
+    /// writes down the kind it has none of instead.
+    pub fn is_a_lock(kind: i32) -> bool {
+        matches!(kind, Lock::PATTERN | Lock::PIN | Lock::PASSWORD)
+    }
+
     /// Read what the phone recorded. The numbers in it are written in the
     /// order the network uses, which is what the phone's own writer does.
     pub fn of(raw: &[u8]) -> Result<Lock> {
