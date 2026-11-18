@@ -57,6 +57,16 @@ impl App {
             return;
         }
         self.state.wlan = Some(w);
+        // The key the phone keeps was refused: the page asks for one, as it
+        // would have from the start.
+        let failed = self.state.wlan.as_ref().and_then(|w| w.joined.as_ref()).is_some_and(|j| {
+            matches!(j.stage, skyward_net::wlan::Stage::Failed | skyward_net::wlan::Stage::WrongPassword)
+        });
+        if failed
+            && let Some(network) = self.state.saved_try.take()
+        {
+            self.ask_password(network);
+        }
         if matches!(self.screen(), Screen::Home | Screen::Wlan | Screen::WlanNetwork | Screen::Update | Screen::SkywardUpdate) {
             self.refresh();
         }

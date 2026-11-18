@@ -2694,6 +2694,9 @@ impl Pages<'_> {
             }
             Effect::EnterRecovery => self.enter_recovery()?,
             Effect::FileTransfer(on) => self.file_transfer(on, now)?,
+            // The pages that ask for these come later in the line; a build
+            // without them has nothing to do here.
+            _ => {}
         }
         Ok(Vec::new())
     }

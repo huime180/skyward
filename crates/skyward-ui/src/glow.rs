@@ -361,6 +361,11 @@ impl Dither {
         }
         Dither { w, steps }
     }
+
+    /// The width this dither was worked out for.
+    pub fn width(&self) -> usize {
+        self.w
+    }
 }
 
 /// Cards scrolling over the field: their pixels, their coverage row by

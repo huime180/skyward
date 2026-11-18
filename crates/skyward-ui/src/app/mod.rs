@@ -33,6 +33,8 @@ use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan}
 use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
+
+
 mod act;
 mod backup;
 mod decrypt;
@@ -40,6 +42,8 @@ mod draw;
 mod entry;
 mod filesystem;
 mod frame;
+#[cfg(test)]
+mod tablet;
 mod input;
 mod install;
 mod keys;
@@ -49,6 +53,8 @@ mod nav;
 mod power;
 mod prefs;
 mod reboot;
+mod root;
+mod root_act;
 mod relabel;
 mod scroll;
 mod skyward;
@@ -71,6 +77,7 @@ pub use manager::*;
 pub use mount::*;
 pub use prefs::*;
 pub use reboot::*;
+pub use root::*;
 pub use relabel::*;
 pub use skyward::*;
 pub use state::*;
@@ -179,6 +186,27 @@ pub enum Screen {
     /// The WLAN switch, the network chosen and how joining it goes, and
     /// the networks in range.
     Wlan,
+    /// The partitions an install keeps as they are, a switch each.
+    Keep,
+    /// Patching the boot image the phone's root manager patches.
+    Root,
+    /// What a patch with the package chosen would do, and the swipe that
+    /// does it.
+    RootConfirm,
+    /// The managers the data partition holds, which a patch can run.
+    RootInstalled,
+    /// The partitions an image of the phone's own is written to.
+    RootDirect,
+    /// The ways to a manager, and to an image.
+    RootManagers,
+    RootImages,
+    /// The modules the phone's root manager has.
+    Modules,
+    /// One module: what it says of itself, and what can be done with it.
+    ModuleInfo,
+    /// The proxy every request goes through, typed where a network's own
+    /// details stand.
+    Proxy,
     /// The password of the network chosen, typed on the screen's keyboard.
     WlanPassword,
     /// The network joined, and the address and the rest it gave.
@@ -221,6 +249,9 @@ pub enum Confirm {
     SwitchSystem,
     /// Take the other system away.
     RemoveSystem,
+    /// Patch the image chosen with the manager chosen, and write it into the
+    /// partition or leave it as a file.
+    PatchRoot,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
 }
@@ -382,6 +413,23 @@ pub enum Action {
     UpdateSkyward,
     /// Stop downloading the build.
     StopSkywardUpdate,
+    /// Open the page that patches the boot image, with the manager chosen
+    /// for it.
+    OpenPatchImage,
+    /// Open the images a system package holds.
+    OpenPackages,
+    /// Write an image of the phone's own into the partition chosen.
+    OpenDirect,
+    /// Open the module at this place in the list.
+    OpenModule(usize),
+    /// Have the manager take the module at this place away.
+    RemoveModule(usize),
+    /// Have the manager take the module at this place again, as it was.
+    RestoreModule(usize),
+    /// Flash the image taken out of a package.
+    FlashTaken,
+    /// Type the proxy the downloads go through.
+    OpenProxy,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
 }
@@ -589,6 +637,12 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    /// Patch the image chosen with the manager chosen, and put it where the
+    /// page said.
+    PatchRootImage,
+    /// Go through this proxy, as `host:port`, for every request: empty
+    /// where the phone's own settings are to say.
+    SetProxy(String),
 }
 
 enum Drag {
@@ -1190,9 +1244,15 @@ pub struct App {
     /// How round the screen's corners are, in pixels.
     corners: f32,
     dirty: bool,
+    /// The width of the panel itself: on a tablet the page beside the
+    /// sidebar has the rest of it.
+    full_width: u32,
     w: u32,
     h: u32,
     px_per_dp: f32,
+    /// The sections beside the page, where the panel is wide enough.
+    tablet: Option<crate::tablet::Tablet>,
+    tablet_mode: bool,
 }
 
 impl App {
@@ -1256,9 +1316,12 @@ impl App {
             backdrop: None,
             corners: 0.0,
             dirty: true,
+            full_width: w,
             w,
             h,
             px_per_dp,
+            tablet: None,
+            tablet_mode: false,
         }
     }
 
@@ -1266,6 +1329,44 @@ impl App {
     /// leading corners of a page sliding over another.
     pub fn set_screen_corners(&mut self, radius: f32) {
         self.corners = radius;
+    }
+
+    /// Lay the pages out for a panel of this size: a panel wide enough for
+    /// a tablet keeps its sections beside the page, which has the rest of
+    /// the width.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let tablet = self.state.tablet && self.screen() != Screen::Fastboot
+            && width.min(height) as f32 / self.px_per_dp >= 600.0;
+        if (self.full_width, self.h, self.tablet_mode) == (width, height, tablet) {
+            return;
+        }
+        self.full_width = width;
+        self.h = height;
+        self.tablet_mode = tablet;
+        let sidebar = if tablet { width / 3 } else { 0 };
+        self.w = width - sidebar;
+        self.tablet = tablet.then(|| crate::tablet::Tablet::new(sidebar, self.w, height, self.px_per_dp));
+        self.end_turn();
+        self.backdrop = None;
+        self.cue = None;
+        self.drag = Drag::Idle;
+        self.tracker = Tracker::default();
+        self.state.held = None;
+        self.state.confirm = 0.0;
+        self.search_words = None;
+        self.chip = None;
+        self.button_chip = None;
+        self.dither = None;
+        let glow = self.glow.take();
+        self.settle_page();
+        self.glow = glow;
+        self.refresh();
+        self.spare.clear();
+    }
+
+    /// Which of the tablet's sections the page it shows belongs to.
+    pub(crate) fn tablet_selection(&self) -> Screen {
+        self.stack.iter().map(|p| p.0).find(|&s| crate::tablet::is_section(s)).unwrap_or(Screen::About)
     }
 
     pub fn theme(&self) -> Theme {
@@ -1279,6 +1380,7 @@ impl App {
     pub fn screen(&self) -> Screen {
         self.top().0
     }
+
 
     fn top(&self) -> &(Screen, f32, Focus) {
         self.stack.last().expect("the page stack always holds a page")
@@ -1578,6 +1680,11 @@ impl App {
 
     /// The page's readings changed (battery, storage): render it again.
     pub fn refresh(&mut self) {
+        // The sections stand beside a page: a tablet's page is never the
+        // home page, which its sidebar shows.
+        if self.tablet_mode && self.screen() == Screen::Home {
+            self.stack.push((Screen::About, 0.0, Focus::Unset));
+        }
         self.frame = None;
         self.stale.clear();
         self.spots = None;

@@ -78,9 +78,20 @@ impl App {
     /// stopped; while a package is being read or written, the page stays.
     /// In the file manager, back climbs a folder until it reaches the root,
     /// and in a place, until it reaches the place's top.
+    /// Whether there is a page behind this one to go back to: a tablet's
+    /// sections stand beside the sidebar, which is where its navigation is,
+    /// so a section page has nothing behind it.
+    pub(super) fn can_go_back(&self) -> bool {
+        self.stack.len() > 1
+            && !(self.tablet_mode
+                && self.stack.len() == 2
+                && self.stack[0].0 == Screen::Home
+                && crate::tablet::is_section(self.screen()))
+    }
+
     pub(super) fn back(&mut self, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
-        if self.stack.len() <= 1 {
+        if !self.can_go_back() {
             return fx;
         }
         let morph = self.screen() == Screen::Search && self.stack[self.stack.len() - 2].0 == Screen::Home;

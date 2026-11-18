@@ -130,6 +130,12 @@ pub struct Choice {
 }
 
 impl App {
+    /// Show the install under way: the page that says how far it is and how
+    /// it ended.
+    pub fn show_install(&mut self) {
+        self.open(Screen::Installing);
+    }
+
     /// The system asked for the package at `name` to be installed before
     /// the recovery started: the installing page opens over the home page,
     /// looking for it. `security` for a security update.
@@ -631,3 +637,5 @@ mod tests {
         assert_eq!(app.state.install, Install::Ending);
     }
 }
+
+

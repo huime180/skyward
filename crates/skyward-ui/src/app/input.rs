@@ -23,7 +23,35 @@ impl App {
         if matches!(ev, Touch::Down(..)) && self.just_woke(now) {
             self.stir(now);
             self.drag = Drag::Waking;
+            if let Some(tablet) = &mut self.tablet {
+                tablet.cancel_gesture();
+            }
             return Vec::new();
+        }
+        // A tablet keeps its sections beside the page: the sidebar takes the
+        // touches on its own ground, and hands the page the ones beside it
+        // with the sidebar's width taken off.
+        let mut ev = ev;
+        if let Some(mut tablet) = self.tablet.take() {
+            let routed = tablet.route(ev);
+            let mut beside = false;
+            let effects = match routed {
+                crate::tablet::Input::Detail(inner) => {
+                    ev = inner;
+                    beside = true;
+                    Vec::new()
+                }
+                crate::tablet::Input::Select(screen) => self.tablet_section(screen, now),
+                crate::tablet::Input::Sidebar => {
+                    self.stir(now);
+                    self.dirty = true;
+                    Vec::new()
+                }
+            };
+            self.tablet = Some(tablet);
+            if !beside {
+                return effects;
+            }
         }
         // A finger on the glass puts the keys' light out, whatever a key
         // held down was doing comes to nothing, and a page sliding comes to
@@ -57,7 +85,7 @@ impl App {
                 };
                 // The first page has nothing to go back to: its edges are
                 // like the rest of it.
-                let at_edge = side.filter(|_| self.stack.len() > 1);
+                let at_edge = side.filter(|_| self.can_go_back());
                 // A swipe in from an edge goes back over whatever the page is
                 // doing: a finger landing there leaves a gliding or springing
                 // page alone until it drags the page, and presses nothing.
@@ -503,7 +531,65 @@ impl App {
         }
         self.layer = None;
     }
+
+    /// Open one of a tablet's sections beside it: the page changes at once,
+    /// with none of the phone's sliding, and starts from what the section is.
+    pub(super) fn tablet_section(&mut self, screen: Screen, now: u64) -> Vec<Effect> {
+        if self.screen() == screen {
+            return Vec::new();
+        }
+        // Work under way keeps its page.
+        if matches!(
+            self.screen(),
+            Screen::Editor
+                | Screen::Installing
+                | Screen::BackupJob
+                | Screen::PartWork
+                | Screen::Erase
+                | Screen::Relabel
+                | Screen::SkywardUpdate
+                | Screen::FileJob
+                | Screen::CantStart
+                | Screen::Unhandled
+                | Screen::Fastboot
+        ) || self.state.systems_work.is_some()
+            || matches!(self.state.data, Data::Opening | Data::Locked { checking: true, .. })
+        {
+            self.say(
+                self.state.lang.pick([
+                    "请先完成当前操作或返回",
+                    "請先完成目前操作或返回",
+                    "Finish this operation or go back first",
+                ]),
+                now,
+            );
+            return Vec::new();
+        }
+        self.end_turn();
+        self.leave(false);
+        self.morph = None;
+        self.drag = Drag::Idle;
+        self.state.password.clear();
+        self.state.code.clear();
+        self.state.pattern.clear();
+        self.state.joining = None;
+        self.state.details = None;
+        self.state.clip = None;
+        self.state.adding = None;
+        self.state.mount_failure = None;
+        self.state.next_slot = None;
+        self.state.system_pick = None;
+        self.state.restore = None;
+        self.state.file = None;
+        self.state.asking_delete = false;
+        self.stack.truncate(1);
+        self.stack[0] = (Screen::Home, 0.0, Focus::Unset);
+        let effects = self.act(Action::Open(screen), now);
+        self.keys = false;
+        effects
+    }
 }
+
 
 #[cfg(test)]
 mod tests {

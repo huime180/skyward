@@ -7,6 +7,112 @@ impl App {
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
         match action {
+            Action::OpenPatchImage => {
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Image);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenDirect => {
+                self.open(Screen::RootDirect);
+            }
+            Action::OpenPackages => {
+                // The page a manager's package is picked on: what a patch
+                // runs with, and no other file.
+                let screen = Screen::Choose(Place::Storage);
+                self.state.root_pick = Some(RootPick::Manager);
+                *self.state.folder_mut(screen) = Folder::new("");
+                self.open(screen);
+                return vec![Effect::ReadPlace(Place::Storage, String::new())];
+            }
+            Action::OpenModule(at) => {
+                self.state.module = Some(at);
+                self.open(Screen::ModuleInfo);
+            }
+            Action::RemoveModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::uninstall(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::RestoreModule(at) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::restore(dir, &module.id);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::FlashTaken => {
+                if let Some(path) = self.state.pending_flash.take() {
+                    return vec![Effect::InstallPath(path)];
+                }
+            }
+            Action::Toggle(Switch::RootManager(at)) => {
+                let found = skyward_root::installed::installed().unwrap_or_default();
+                if let Some(app) = found.get(at) {
+                    let source = RootSource::Apk(app.apk.display().to_string());
+                    self.root_manager_chosen(ManagerWay::Installed, source);
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::RootSource(0)) => {
+                self.root_manager_chosen(ManagerWay::LastUsed, RootSource::Installed);
+                return Vec::new();
+            }
+            Action::Toggle(Switch::RootSource(_)) => self.refresh(),
+            Action::Toggle(Switch::RootPartition(at)) => {
+                let partitions = root_partitions();
+                if let Some(name) = partitions.get(at).copied() {
+                    self.state.root_partition = Some(name);
+                    self.state.root_image = RootImage::Partition;
+                    self.state.root_image_way = ImageWay::Direct;
+                    self.state.root_said = None;
+                    self.back_to_root();
+                    return Vec::new();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::Keep(place)) => {
+                let parts = skyward_root::partitions::here();
+                if let Some(name) = parts.get(place) {
+                    let kept = &mut self.state.keep_partitions;
+                    match kept.iter().position(|one| one == name) {
+                        Some(at) => { kept.remove(at); }
+                        None => kept.push(name.clone()),
+                    }
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::Module(at)) => {
+                if let Some(module) = self.state.modules.as_ref().and_then(|list| list.get(at)) {
+                    let (id, on) = (module.id.clone(), !module.enabled);
+                    let dir = std::path::Path::new(skyward_root::modules::MODULES);
+                    let _ = skyward_root::modules::set_enabled(dir, &id, on);
+                    self.read_modules();
+                }
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickVariant(at)) => {
+                self.state.root_variant = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickTier(at)) => {
+                self.state.root_tier = at;
+                self.refresh();
+            }
+            Action::Toggle(Switch::PickProxy(at)) => {
+                self.state.root_proxy = at;
+                self.refresh();
+            }
+            Action::OpenProxy => {
+                self.state.proxy_text = skyward_net::http::proxy().unwrap_or_default();
+                self.open(Screen::Proxy);
+            }
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
@@ -58,6 +164,12 @@ impl App {
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
                     Switch::ShowPassword => &mut self.state.show_password,
                     Switch::Wlan => unreachable!("the WLAN switch is turned above"),
+                    Switch::KeepRoot => &mut self.state.keep_root,
+                    Switch::Keep(_) | Switch::Module(_) | Switch::RootPartition(_) | Switch::PickVariant(_)
+                    | Switch::PickTier(_) | Switch::PickProxy(_) | Switch::RootManager(_) | Switch::RootSource(_) => {
+                        unreachable!("the root pages take these themselves")
+                    }
+
                 };
                 *on = !*on;
                 let now_on = *on;
@@ -375,7 +487,25 @@ impl App {
                         self.state.folder_mut(screen).leave(scroll);
                         return vec![Effect::ReadPlace(place, path)];
                     }
-                    FileKind::File | FileKind::Link { folder: false, .. } => return self.install_file(place, path, entry.size, now),
+                    FileKind::File | FileKind::Link { folder: false, .. } => {
+                        // A file picked for a root page is that page's, not
+                        // an install's.
+                        if let Some(pick) = self.state.root_pick.take() {
+                            // A place's folder names what it holds from its
+                            // own top: the file is reached from there.
+                            let top = match place {
+                                Place::Storage => "/sdcard",
+                                Place::UsbDrive => crate::app::manager::USB_DRIVE,
+                            };
+                            let path = format!("{top}/{path}");
+                            match pick {
+                                RootPick::Manager => self.root_manager_chosen(ManagerWay::Storage, RootSource::Apk(path)),
+                                RootPick::Image => self.root_image_chosen(ImageWay::File, RootImage::File(path)),
+                            }
+                            return Vec::new();
+                        }
+                        return self.install_file(place, path, entry.size, now);
+                    }
                     FileKind::Special => unreachable!("a place lists no special files"),
                 }
             }
@@ -400,7 +530,21 @@ impl App {
                     Security::Enterprise => {
                         self.say(l.pick(["暂不支持需要账号登录的网络", "尚不支援需要帳號登入的網路", "Networks that need an account sign-in aren't supported"]), now)
                     }
-                    s if s.password() => self.ask_password(network),
+                    // A key the phone already keeps for the network is the
+                    // one it joins with: nothing to type. A key it refuses is
+                    // asked for, once.
+                    s if s.password() => match skyward_net::wlan::known().into_iter().find(|k| k.ssid == network.ssid) {
+                        Some(known) => {
+                            self.state.saved_try = Some(network.clone());
+                            return vec![Effect::JoinWlan {
+                                ssid: network.ssid,
+                                name: network.name,
+                                security: network.security,
+                                password: Secret(known.key),
+                            }];
+                        }
+                        None => self.ask_password(network),
+                    },
                     _ => {
                         return vec![Effect::JoinWlan {
                             ssid: network.ssid,
@@ -572,6 +716,7 @@ impl App {
             Screen::Search => &mut self.state.search,
             Screen::Decrypt => &mut self.state.code,
             Screen::Rename => &mut self.state.new_name,
+            Screen::Proxy => &mut self.state.proxy_text,
             Screen::WlanPassword => &mut self.state.password,
             Screen::WlanAdd => {
                 let a = self.state.adding.as_mut().expect("the page adds a network");
@@ -638,6 +783,22 @@ impl App {
                 // A password the network's protection cannot take is turned
                 // down here; one it can goes, and the WLAN page shows how
                 // joining goes.
+                // The proxy is taken as it is typed; an empty line leaves
+                // every request to go as it did before.
+                Screen::Proxy => {
+                    let text = self.state.proxy_text.trim().to_string();
+                    if !text.is_empty() && !text.contains(':') {
+                        self.say(l.pick([
+                            "代理写成「主机:端口」，例如 192.168.1.2:7890",
+                            "代理寫成「主機:連接埠」，例如 192.168.1.2:7890",
+                            "A proxy reads \u{201c}host:port\u{201d}, such as 192.168.1.2:7890",
+                        ]), now);
+                    } else {
+                        let mut fx = self.back(now);
+                        fx.push(Effect::SetProxy(text));
+                        return fx;
+                    }
+                }
                 Screen::WlanPassword => {
                     let network = self.state.joining.clone().expect("the password page is for a network");
                     match refused(l, network.security, &self.state.password) {
@@ -701,6 +862,11 @@ impl App {
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::PatchRoot => {
+                self.state.root_said = None;
+                self.refresh();
+                fx.push(Effect::PatchRootImage);
+            }
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();

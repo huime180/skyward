@@ -5,6 +5,7 @@
 use super::*;
 
 impl App {
+
     /// What the status bar shows, its clock reading `clock`: the battery,
     /// the network joined, the data partition's lock, the slot the system
     /// runs from, and the battery's temperature.
@@ -54,6 +55,12 @@ impl App {
             let band = Band { rows: (first, first + self.h), cols: (0, wide.min(self.w)) };
             let cx = Ctx { t: &t, f, info, state: &self.state, term: self.term.as_ref(), band: Some(band) };
             let mut frame = pages::render(screen, &cx);
+            // A tablet picks its sections in the fixed sidebar beside the
+            // page: a section's own page was not pushed onto another, so it
+            // carries no way back, and back cannot uncover the phone's menu.
+            if self.tablet.is_some() && self.stack.len() <= 2 && crate::tablet::is_section(self.screen()) {
+                frame.back = false;
+            }
             // A page drawn in part across holds its rows whole, the columns
             // of them drawn on as they are needed.
             self.cols = frame.canvas.cols().end;
@@ -167,7 +174,19 @@ impl App {
     pub fn compose(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, clock: &str, now: u64) {
         let charge = self.charging.as_ref().map_or(0.0, |c| c.shown.level(now));
         if charge < 1.0 {
-            self.compose_page(out, f, info, clock, now);
+            // A tablet keeps its sections beside the page: they are drawn by
+            // the tablet, which lays both on the panel, and the status bar
+            // runs across the two.
+            if let Some(mut tablet) = self.tablet.take() {
+                self.compose_page(&mut tablet.detail, f, info, clock, now);
+                tablet.paint(out, f, info, self);
+                let mut t = self.theme();
+                t.m.w = out.w;
+                widgets::status_bar(out, &t, f, &self.bar(clock, info), t.pal.status);
+                self.tablet = Some(tablet);
+            } else {
+                self.compose_page(out, f, info, clock, now);
+            }
         }
         if charge > 0.0 {
             self.compose_charging(out, f, info, charge, now);
@@ -183,7 +202,12 @@ impl App {
             self.charge_art = Some(charge::Art::new(f, &t.m, lang, battery).expect("the screens' face takes the charging screen's weight"));
         }
         let since = self.charging.as_ref().map_or(now, |c| c.since);
-        let dither = self.dither.get_or_insert_with(|| glow::Dither::new(out.w as usize, out.h as usize));
+        // A pane is narrower than the screen: the dither is worked out again
+        // for the width it is drawn into.
+        if self.dither.as_ref().is_none_or(|d| d.width() != out.w as usize) {
+            self.dither = Some(glow::Dither::new(out.w as usize, out.h as usize));
+        }
+        let dither = self.dither.as_ref().expect("a dither for this canvas");
         let art = self.charge_art.as_ref().expect("drawn above");
         if level >= 1.0 {
             charge::draw(out, art, &t.m, battery.level, now.saturating_sub(since), dither);
@@ -372,7 +396,12 @@ impl App {
             let fade = (1.0 - scroll / m.dp(ABOUT_FIELD_DP)).clamp(0.0, 1.0);
             let top = (widgets::bar_bottom(t) + m.dp(ABOUT_FIELD_DP)) / m.h as f32;
             let field = glow::sample(glow, out.w as usize, out.h as usize, FIELD_CELL, top, t.pal.bg, fade);
-            let dither = self.dither.get_or_insert_with(|| glow::Dither::new(out.w as usize, out.h as usize));
+            // A pane is narrower than the screen: the dither is worked out again
+        // for the width it is drawn into.
+        if self.dither.as_ref().is_none_or(|d| d.width() != out.w as usize) {
+            self.dither = Some(glow::Dither::new(out.w as usize, out.h as usize));
+        }
+        let dither = self.dither.as_ref().expect("a dither for this canvas");
             glow::paint(out, &field, fade, &glow::Layer { canvas: &frame.canvas, runs: &art.runs, offset: offset as isize }, dither);
             press_row(out);
             let range = m.dp(ABOUT_LOGO_DP) - widgets::bar_bottom(t);
@@ -598,6 +627,25 @@ impl App {
     /// Put the page back where it rests, for a page just opened or returned
     /// to; its first frame shows the bar as its scroll has it.
     pub(super) fn settle_page(&mut self) {
+        if self.screen() == Screen::Modules {
+            self.read_modules();
+        }
+        // The images the phone starts from are read once, when the root page
+        // opens: they are the slowest thing it could do on every frame.
+        if self.screen() == Screen::Root && self.state.root_images.is_none() {
+            let slot = skyward_vab::current_slot().ok().flatten();
+            let mut found = Vec::new();
+            if let Some(slot) = slot {
+                for partition in ["boot", "init_boot"] {
+                    let by_name = std::path::Path::new(skyward_root::BY_NAME);
+                    if !by_name.join(format!("{partition}{}", slot.suffix())).exists() {
+                        continue;
+                    }
+                    found.push((partition.to_string(), skyward_root::rooted::of_partition(by_name, partition, slot)));
+                }
+            }
+            self.state.root_images = Some(found);
+        }
         self.height = 0.0;
         self.fling = None;
         self.glide = None;

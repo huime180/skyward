@@ -179,17 +179,24 @@ impl Folder {
 
 /// Whether a list in a place shows an entry: a folder, or a file the
 /// installer takes. Hidden entries are left out, as the stock file manager
-/// leaves them out.
-fn installable(e: &FileRow) -> bool {
+/// What a page for `wanted` shows of a folder: its folders, and the files
+/// named with one of those endings.
+fn shown(e: &FileRow, wanted: &[&str]) -> bool {
     if e.name.starts_with('.') {
         return false;
     }
     match e.kind {
         FileKind::Folder { .. } | FileKind::Link { folder: true, .. } => true,
-        FileKind::File | FileKind::Link { folder: false, .. } => installs(e),
+        // A file's name is taken whatever its case: `OTA.ZIP` installs as
+        // `ota.zip` does.
+        FileKind::File | FileKind::Link { folder: false, .. } => {
+            let name = e.name.to_lowercase();
+            wanted.iter().any(|end| name.ends_with(end))
+        }
         FileKind::Special => false,
     }
 }
+
 
 /// Whether the installer takes a file by its name: an update package, a
 /// zip that installs itself, or a partition image.
@@ -292,7 +299,14 @@ impl App {
     /// the place's top, or could not: it becomes the folder shown to choose
     /// a file to install in, with what it holds that may be installed.
     pub fn set_place(&mut self, place: Place, folder: String, files: Result<Vec<FileRow>, String>, listed: i64) {
-        let files = files.map(|entries| entries.into_iter().filter(installable).collect());
+        // What the page is for says what it shows: a manager's package, an
+        // image, a system package, or either of the two an install takes.
+        let wanted: &[&str] = match self.state.root_pick {
+            Some(RootPick::Manager) => &[".apk"],
+            Some(RootPick::Image) => &[".img"],
+            _ => &[".zip", ".img"],
+        };
+        let files = files.map(|entries| entries.into_iter().filter(|e| shown(e, wanted)).collect());
         self.show_folder(Screen::Choose(place), folder, files, listed);
     }
 
