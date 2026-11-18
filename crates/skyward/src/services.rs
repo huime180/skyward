@@ -78,10 +78,31 @@ pub fn start(programs: &[Started], libraries: Option<&Path>) -> Result<()> {
         {
             skyward_sys::set_prop(property, "")?;
         }
-        let waiting = s.clone();
         let name = Path::new(&s.path).file_name().map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
-        thread::Builder::new().name(name).spawn(move || supervise(&s, &who, &given)).context("start a supervising thread")?;
-        ready(&waiting)?;
+        // A service ended and started again may find what it holds in the
+        // secure element still busy with the run it just left, and end at
+        // once: it is started again a moment later, as many times as it
+        // takes for the first few, and the recovery goes on without it.
+        let mut left = None;
+        for attempt in 0..3 {
+            let (s, who, given) = (s.clone(), who.clone(), given.clone());
+            let waiting = s.clone();
+            thread::Builder::new().name(name.clone()).spawn(move || supervise(&s, &who, &given)).context("start a supervising thread")?;
+            match ready(&waiting) {
+                Ok(()) => {
+                    left = None;
+                    break;
+                }
+                Err(e) => {
+                    skyward_sys::kmsg(&format!("{} did not come up on try {}: {e:#}", waiting.path, attempt + 1))?;
+                    let _ = end_left(&waiting);
+                    left = Some(e);
+                }
+            }
+        }
+        if let Some(e) = left {
+            skyward_sys::kmsg(&format!("{} stays down: {e:#}", s.path))?;
+        }
     }
     Ok(())
 }
