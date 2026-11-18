@@ -2384,6 +2384,7 @@ dependencies = [
  "skyward-net",
  "skyward-omapi",
  "skyward-programs",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-ui",
