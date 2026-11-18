@@ -1197,6 +1197,9 @@ struct Pages<'a> {
     /// Opening the data partition, or a user's own files in it, under way,
     /// and the users whose own files are still closed once it is open.
     decryptor: Option<Decryptor>,
+    /// How many times a character was typed in the owner's place for a
+    /// phone that set no lock, to open their own files as they would.
+    typed_for_owner: u8,
     closed: Vec<Closed>,
     /// Work on whole partitions under way.
     part_worker: Option<partwork::Worker>,
@@ -1425,6 +1428,7 @@ impl<'a> Pages<'a> {
             erase_leaves: false,
             rescue_erasing: false,
             decryptor: None,
+            typed_for_owner: 0,
             closed: Vec::new(),
             part_worker: None,
             worker: None,
@@ -2418,6 +2422,19 @@ impl Pages<'_> {
                 }
                 self.closed = opening.closed;
                 show_closed(&mut self.app, &self.closed)?;
+                // A phone whose owner set no lock still keeps their files
+                // behind a key the secure element parts with only when
+                // something is typed: one character is typed in their place,
+                // as they would, rather than the page waiting for them.
+                let lockless = self.closed.iter().find(|c| c.user == 0).is_some_and(|c| {
+                    !matches!(c.lock, skyward_crypto::user::Lock::PATTERN | skyward_crypto::user::Lock::PIN | skyward_crypto::user::Lock::PASSWORD)
+                });
+                if lockless && self.typed_for_owner < 3 {
+                    self.typed_for_owner += 1;
+                    let closed = self.closed.clone();
+                    skyward_sys::kmsg(&format!("typing a character for the owner, who set no lock ({})", self.typed_for_owner))?;
+                    self.decryptor = Some(Decryptor::start(decrypt::Job::Unlock { closed, user: 0, credential: b"0".to_vec() })?);
+                }
                 // A proxy written by hand, in a file of its own, wins over
                 // the one the phone's own settings keep.
                 let by_hand = std::fs::read_to_string("/sdcard/skyward.proxy")

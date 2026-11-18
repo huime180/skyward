@@ -208,12 +208,18 @@ pub fn open_without_credential(service: &KeyMint) -> Result<Opening> {
         // files are behind.
         let protector = protectors(user)?.into_iter().next().expect("a user the phone lists has a blob");
         match protector.lock.as_ref().map(|lock| lock.kind) {
-            None => {
-                let note = open_user_files_behind(service, user, &protector, None, None)?;
-                if user == OWNER {
-                    owner = note;
+            None => match open_user_files_behind(service, user, &protector, None, None) {
+                Ok(note) => {
+                    if user == OWNER {
+                        owner = note;
+                    }
                 }
-            }
+                // A user who set no lock keeps their files behind a key the
+                // secure element will not give up for nothing typed: they
+                // are reported closed, and one character is typed for them,
+                // which is what opens them when a person types one.
+                Err(e) => closed.push(Closed { user, lock: crate::user::Lock::NONE, made_up: false, why: Some(format!("{e:#}")) }),
+            },
             Some(kind) => closed.push(Closed { user, lock: kind, made_up: made_up(user, &protector.id), why: None }),
         }
     }
