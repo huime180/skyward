@@ -874,7 +874,10 @@ fn show_closed(app: &mut App, closed: &[Closed]) -> Result<()> {
             skyward_sys::kmsg(&format!("the files of user {} stay closed: {why}", c.user))?;
         }
     }
-    let waiting = closed.iter().find(|c| !c.made_up).map(|c| {
+    // Only the owner is reported and asked for: another user's own files
+    // are nothing a recovery has to show, and naming them on the page
+    // reads as a lock this phone never set.
+    let waiting = closed.iter().find(|c| c.user == 0 && !c.made_up).map(|c| {
         let keys = match c.lock {
             Lock::PATTERN => Keys::Pattern,
             Lock::PIN => Keys::Digits,
@@ -1197,9 +1200,9 @@ struct Pages<'a> {
     /// Opening the data partition, or a user's own files in it, under way,
     /// and the users whose own files are still closed once it is open.
     decryptor: Option<Decryptor>,
-    /// How many times a character was typed in the owner's place for a
-    /// phone that set no lock, to open their own files as they would.
-    typed_for_owner: u8,
+    /// The users a character was typed for, their phones having set no
+    /// lock: what opens their own files when a person types one.
+    typed_for: Vec<u32>,
     closed: Vec<Closed>,
     /// Work on whole partitions under way.
     part_worker: Option<partwork::Worker>,
@@ -1428,7 +1431,7 @@ impl<'a> Pages<'a> {
             erase_leaves: false,
             rescue_erasing: false,
             decryptor: None,
-            typed_for_owner: 0,
+            typed_for: Vec::new(),
             closed: Vec::new(),
             part_worker: None,
             worker: None,
@@ -2411,6 +2414,24 @@ impl Pages<'_> {
         }
     }
 
+    /// Type a character in the place of the next user who set no lock and
+    /// whose own files are still closed: what a person typing one at their
+    /// screen finds opens them.
+    fn type_for_lockless(&mut self) -> Result<()> {
+        use skyward_crypto::user::Lock;
+        let next = self
+            .closed
+            .iter()
+            .find(|c| c.user == 0 && !self.typed_for.contains(&c.user) && !matches!(c.lock, Lock::PATTERN | Lock::PIN | Lock::PASSWORD))
+            .map(|c| c.user);
+        let Some(user) = next else { return Ok(()) };
+        self.typed_for.push(user);
+        skyward_sys::kmsg(&format!("typing a character for user {user}, who set no lock"))?;
+        let closed = self.closed.clone();
+        self.decryptor = Some(Decryptor::start(decrypt::Job::Unlock { closed, user, credential: b"0".to_vec() })?);
+        Ok(())
+    }
+
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
         let Some(ended) = self.decryptor.as_ref().and_then(Decryptor::ended) else { return Ok(()) };
@@ -2426,15 +2447,7 @@ impl Pages<'_> {
                 // behind a key the secure element parts with only when
                 // something is typed: one character is typed in their place,
                 // as they would, rather than the page waiting for them.
-                let lockless = self.closed.iter().find(|c| c.user == 0).is_some_and(|c| {
-                    !matches!(c.lock, skyward_crypto::user::Lock::PATTERN | skyward_crypto::user::Lock::PIN | skyward_crypto::user::Lock::PASSWORD)
-                });
-                if lockless && self.typed_for_owner < 3 {
-                    self.typed_for_owner += 1;
-                    let closed = self.closed.clone();
-                    skyward_sys::kmsg(&format!("typing a character for the owner, who set no lock ({})", self.typed_for_owner))?;
-                    self.decryptor = Some(Decryptor::start(decrypt::Job::Unlock { closed, user: 0, credential: b"0".to_vec() })?);
-                }
+                self.type_for_lockless()?;
                 // A proxy written by hand, in a file of its own, wins over
                 // the one the phone's own settings keep.
                 let by_hand = std::fs::read_to_string("/sdcard/skyward.proxy")
@@ -2459,6 +2472,7 @@ impl Pages<'_> {
             decrypt::Ended::Unlocked(Ok(still)) => {
                 self.closed = still;
                 show_closed(&mut self.app, &self.closed)?;
+                self.type_for_lockless()?;
             }
             decrypt::Ended::Unlocked(Err(why)) => {
                 skyward_sys::kmsg(&format!("what was entered did not open the user's files: {why}"))?;
