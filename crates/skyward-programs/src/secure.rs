@@ -392,6 +392,8 @@ fn started(phone: &Phone, program: &Program, ready: Ready, registers: Vec<String
         ready_property,
         ready_service,
         registers,
+        mounts: Vec::new(),
+        environment: std::collections::HashMap::new(),
         ready_hardware_service,
         when: None,
         user: program.user.clone(),
