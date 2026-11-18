@@ -214,6 +214,21 @@ pub fn open_without_credential(service: &KeyMint) -> Result<Opening> {
                     owner = note;
                 }
             }
+            // A phone with no screen lock still writes down the kind it has
+            // none of: the empty credential is the one that opens such a
+            // user's files, and waiting for one to be typed would keep them
+            // closed for ever. Where the empty one does not open them, the
+            // user is asked as one with a lock is.
+            Some(kind) if !crate::user::Lock::is_a_lock(kind) => {
+                match open_user_files_behind(service, user, &protector, Some(b""), None) {
+                    Ok(note) => {
+                        if user == OWNER {
+                            owner = note;
+                        }
+                    }
+                    Err(_) => closed.push(Closed { user, lock: kind, made_up: made_up(user, &protector.id), why: None }),
+                }
+            }
             Some(kind) => closed.push(Closed { user, lock: kind, made_up: made_up(user, &protector.id), why: None }),
         }
     }
