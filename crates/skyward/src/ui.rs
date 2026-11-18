@@ -1011,7 +1011,15 @@ fn detach(services: Vec<Service>) -> Detach {
 /// on a phone that has them, and checks a zip's signature before its
 /// install script runs.
 fn install_options(app: &App) -> Options {
-    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, signed: app.state.check_signature }
+    Options {
+        keep: app.state.keep_recovery && app.state.recovery_partitions,
+        signed: app.state.check_signature,
+        // The pages that ask for these come with the root work and the
+        // package pages; a build without them keeps nothing and patches
+        // nothing.
+        keeps: Vec::new(),
+        root: false,
+    }
 }
 
 /// How often the WLAN page scans while it shows.

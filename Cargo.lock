@@ -2509,6 +2509,7 @@ dependencies = [
  "skyward-bootimg",
  "skyward-config",
  "skyward-info",
+ "skyward-root",
  "skyward-sys",
  "skyward-systems",
  "skyward-vab",

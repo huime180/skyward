@@ -1540,6 +1540,7 @@ fn nezha(cfg: &DeviceConfig) -> DeviceInfo {
         cpu: Cpu { cores: 8, max_khz: Some(4_608_000) },
         ram_kib: 15_472_464,
         panel: Some((cfg.display.width, cfg.display.height)),
+        battery_capacity_mah: None,
         screen: cfg.display.diagonal,
         os_version: Some("OS4.0.4.0.XPACNXM".into()),
         android: Some("17".into()),
