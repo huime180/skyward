@@ -1014,11 +1014,8 @@ fn install_options(app: &App) -> Options {
     Options {
         keep: app.state.keep_recovery && app.state.recovery_partitions,
         signed: app.state.check_signature,
-        // The pages that ask for these come with the root work and the
-        // package pages; a build without them keeps nothing and patches
-        // nothing.
-        keeps: Vec::new(),
-        root: false,
+        keeps: app.state.keep_partitions.clone(),
+        root: app.state.keep_root,
     }
 }
 
@@ -1151,6 +1148,15 @@ struct Pages<'a> {
     /// Whether the panel's frame memory has been blacked out for an off
     /// panel; cleared once a real frame is shown again.
     blanked: bool,
+    /// The network whose key a user typed, kept until the network takes it:
+    /// what the phone's own settings learn once it does.
+    typed_key: Option<(Vec<u8>, String)>,
+    /// Whether the network the phone's own settings keep was joined.
+    joined_known: bool,
+    /// When the touchscreen is to be told again, a moment after it is told
+    /// as the panel comes back on: a driver that resumed in its own time
+    /// hears the second telling.
+    arm_at: Option<Instant>,
     /// When the panel gone dark began to rest.
     rested_at: Option<Instant>,
     /// Started for fastboot, the port goes to the phone's own fastbootd. The
@@ -1260,7 +1266,7 @@ impl<'a> Pages<'a> {
             surface.settle()?;
         }
         eprintln!("display {}", surface.describe());
-        let inputs = Inputs::open(w, h, cfg.touch.writes.clone())?;
+        let inputs = Inputs::open(w, h, cfg.touch.clone())?;
         let started = Instant::now();
         let control = Control::open()?;
         let haptics = cfg.haptics.as_ref().map(Haptics::open).transpose()?;
@@ -1282,6 +1288,9 @@ impl<'a> Pages<'a> {
             | Work::SystemStopped => start,
         };
         let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
+        // What the device is, before its first frame: a tablet keeps its
+        // sections beside the page.
+        app.configure_device(cfg);
         app.set_screen_corners(cfg.display.corner_radius as f32);
         // The settings kept from the starts before are back before the first
         // frame, and before file transfer starts with its switch and the time
@@ -1395,7 +1404,10 @@ impl<'a> Pages<'a> {
             readings,
             read_at,
             asked: None,
+            typed_key: None,
+            joined_known: false,
             blanked: false,
+            arm_at: None,
             rested_at: None,
             fastboot,
             port_at,
@@ -1550,7 +1562,11 @@ impl<'a> Pages<'a> {
                 let _ = skyward_sys::kmsg(&format!("the vendor interface's libraries are not open: {e:#}"));
                 None
             });
-            self.wlan = Some(wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?);
+            let worker = wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?;
+            // The WLAN comes up on its own, as it did on the phone's own
+            // recovery: a network it knows is joined without asking.
+            worker.send(wlan::Command::On);
+            self.wlan = Some(worker);
         }
         self.scanned_at = Instant::now();
         self.app.state.update_server = cfg.update.is_some();
@@ -1614,6 +1630,7 @@ impl<'a> Pages<'a> {
         self.updates_told(now)?;
         self.skyward_told(now)?;
         self.decrypt_told(now)?;
+        self.root_told(now);
         self.shell_told()?;
         self.take_in(drive_told, now)?;
         self.offer_storage(now)
@@ -1709,8 +1726,15 @@ impl<'a> Pages<'a> {
                 }
                 shown = true;
             }
+            if self.blanked {
+                self.inputs.rearm()?;
+                self.arm_at = Some(Instant::now() + Duration::from_secs(1));
+            }
             self.blanked = false;
         } else if !self.blanked {
+            // The touchscreen is told what it is told when it is taken in,
+            // as the panel goes dark.
+            self.inputs.rearm()?;
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
             // above zero rather than cutting it shows nothing as it goes off.
@@ -1718,6 +1742,10 @@ impl<'a> Pages<'a> {
             self.surface.present(&self.screen)?;
             self.surface.settle()?;
             self.blanked = true;
+        }
+        if self.arm_at.is_some_and(|at| Instant::now() >= at) {
+            self.inputs.rearm()?;
+            self.arm_at = None;
         }
         // After the frame is on the panel, so a panel coming back on lights
         // with what it should show now, never with what it showed when it
@@ -2198,6 +2226,34 @@ impl Pages<'_> {
     fn wlan_told(&mut self) -> Result<()> {
         if let Some((told, traffic)) = self.wlan.as_ref().map(wlan::Worker::told) {
             if let Some(w) = told {
+                // The network took the key typed for it: the phone's own
+                // settings learn the network, so its system joins it too.
+                if let Some((ssid, key)) = &self.typed_key
+                    && w.joined.as_ref().is_some_and(|j| j.ssid == *ssid && matches!(j.stage, skyward_net::wlan::Stage::Connected(_)))
+                {
+                    let name = String::from_utf8_lossy(ssid).to_string();
+                    match skyward_net::wlan::remember(&name, key) {
+                        Ok(true) => { let _ = skyward_sys::kmsg(&format!("the phone's settings learned {name}")); }
+                        Ok(false) => { let _ = skyward_sys::kmsg("the phone's settings hold no network to copy"); }
+                        Err(e) => { let _ = skyward_sys::kmsg(&format!("the phone's settings stayed as they were: {e}")); }
+                    }
+                    self.typed_key = None;
+                }
+                // The phone's own network is joined without being asked.
+                if !self.joined_known && w.power == WlanPower::On && w.joined.is_none() {
+                    let known = skyward_net::wlan::known();
+                    let pick = w.networks.iter().find_map(|n| known.iter().find(|k| k.ssid == n.ssid).map(|k| (n, k.clone())));
+                    if let Some((n, k)) = pick {
+                        let _ = skyward_sys::kmsg(&format!("joining the network the phone keeps: {}", n.name));
+                        self.joined_known = true;
+                        wlan_worker(&self.wlan)?.send(wlan::Command::Join {
+                            ssid: n.ssid.clone(),
+                            name: n.name.clone(),
+                            security: n.security,
+                            password: k.key.clone(),
+                        });
+                    }
+                }
                 self.app.set_wlan(w);
             }
             if let Some(t) = traffic {
@@ -2331,6 +2387,26 @@ impl Pages<'_> {
         Ok(())
     }
 
+    /// What the root pages' work ended with, once it has: a manager's
+    /// package downloaded, or a boot image patched.
+    fn root_told(&mut self, now: u64) {
+        // The managers installed on the phone are read as their pages open,
+        // and kept: reading them on every frame is what made the root pages
+        // slow to come up.
+        if matches!(self.app.screen(), Screen::Root | Screen::RootManagers) && self.app.state.root_apps.is_none() {
+            self.app.root_apps(skyward_root::installed::installed().unwrap_or_default());
+        }
+
+        if let Some(done) = crate::root_work::patched() {
+            let _ = now;
+            let said = match done {
+                Ok(said) => said,
+                Err(e) => format!("修补失败：{e:#}"),
+            };
+            self.app.root_ended(said);
+        }
+    }
+
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
         let Some(ended) = self.decryptor.as_ref().and_then(Decryptor::ended) else { return Ok(()) };
@@ -2342,6 +2418,15 @@ impl Pages<'_> {
                 }
                 self.closed = opening.closed;
                 show_closed(&mut self.app, &self.closed)?;
+                // A proxy written by hand, in a file of its own, wins over
+                // the one the phone's own settings keep.
+                let by_hand = std::fs::read_to_string("/sdcard/skyward.proxy")
+                    .ok()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                if by_hand.is_some() {
+                    skyward_net::http::use_proxy(by_hand);
+                }
             }
             decrypt::Ended::Opened(Err(why)) => {
                 skyward_sys::kmsg(&format!("the data partition stays closed: {why}"))?;
@@ -2523,11 +2608,13 @@ impl Pages<'_> {
             Effect::InstallFile(place, path) => {
                 if self.may_install(now)? {
                     self.installer = Some(Installer::open(in_place(place, &path), detach(self.programs.to_vec()), install_options(&self.app))?);
+                    self.app.show_install();
                 }
             }
             Effect::InstallPath(path) => {
                 if self.may_install(now)? {
                     self.installer = Some(Installer::open(PathBuf::from(path), detach(self.programs.to_vec()), install_options(&self.app))?);
+                    self.app.show_install();
                 }
             }
             Effect::Flash { partition, pick } => {
@@ -2608,12 +2695,39 @@ impl Pages<'_> {
                 self.merger = Some(merge::Merger::start(slot, true)?);
             }
             Effect::Wlan(on) => wlan_worker(&self.wlan)?.send(if on { wlan::Command::On } else { wlan::Command::Off }),
+            // 这两个页面还在从旧的状态机往上游的结构里搬：先明说，不假装做了。
+            // A package comes down and a boot image is patched on threads of
+            // their own: the pages keep drawing while they do.
+            Effect::PatchRootImage => {
+                let partition = self.app.state.root_partition;
+                let source = self.app.state.root_source.clone();
+                let image = self.app.state.root_image.clone();
+                std::thread::Builder::new()
+                    .name("root-patch".into())
+                    .spawn(move || crate::root_work::patch_root(partition, source, image))
+                    .context("start the patch thread")?;
+            }
+
             Effect::ScanWlan => {
                 self.scanned_at = Instant::now();
                 wlan_worker(&self.wlan)?.send(wlan::Command::Scan);
             }
             Effect::JoinWlan { ssid, name, security, password } => {
+                self.typed_key = Some((ssid.clone(), password.0.clone()));
                 wlan_worker(&self.wlan)?.send(wlan::Command::Join { ssid, name, security, password: password.0 })
+            }
+            // What the page sets is kept where the next start finds it: an
+            // empty line takes the hand-written one away and leaves the
+            // phone's own settings to say.
+            Effect::SetProxy(text) => {
+                let at = std::path::Path::new("/sdcard/skyward.proxy");
+                if text.is_empty() {
+                    std::fs::remove_file(at).ok();
+                    skyward_net::http::use_proxy(None);
+                } else {
+                    std::fs::write(at, format!("{text}\n")).ok();
+                    skyward_net::http::use_proxy(Some(text));
+                }
             }
             Effect::LeaveWlan => wlan_worker(&self.wlan)?.send(wlan::Command::Leave),
             Effect::CheckUpdate => self.check_update()?,
@@ -2694,9 +2808,6 @@ impl Pages<'_> {
             }
             Effect::EnterRecovery => self.enter_recovery()?,
             Effect::FileTransfer(on) => self.file_transfer(on, now)?,
-            // The pages that ask for these come later in the line; a build
-            // without them has nothing to do here.
-            _ => {}
         }
         Ok(Vec::new())
     }

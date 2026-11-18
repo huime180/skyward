@@ -106,7 +106,8 @@ impl Worker {
         let (inbox, asked) = worker::telling().context("make the WLAN thread's inbox")?;
         let back = inbox.clone();
         let worker = worker::Worker::start("wlan", move |tell| {
-            let mut s = Station { cfg, modules, libraries, servers, state: Wlan::default(), running: None, back, tell };
+            let mut s = Station { cfg, modules, libraries, servers, state: Wlan::default(), running: None, back, tell,
+                known: std::collections::HashMap::new(), keyed: None };
             s.run(&asked);
         })?;
         Ok(Worker { inbox, worker })
@@ -204,6 +205,12 @@ struct Station {
     /// network reaches, answers to: the thread's own inbox.
     back: Teller<Inbox>,
     tell: Teller<Report>,
+    /// The keys the phone's own Wi-Fi settings keep, read from the data
+    /// partition once it is open: what a network the phone knows needs.
+    known: std::collections::HashMap<Vec<u8>, String>,
+    /// The network joined and the key it took, kept for the phone's own
+    /// settings once the join is through.
+    keyed: Option<(String, String)>,
 }
 
 impl Station {
@@ -259,6 +266,18 @@ impl Station {
             }
             Command::Join { ssid, name, security, password } => {
                 self.unaddress();
+                // A network the phone's own settings keep a key for is
+                // joined with it, without asking for one.
+                let password = if password.is_empty() {
+                    self.known_key(&ssid).unwrap_or_default()
+                } else {
+                    password
+                };
+                if !password.is_empty() {
+                    self.keyed = Some((name.clone(), password.clone()));
+                } else {
+                    self.keyed = None;
+                }
                 let mut joined = Joined { ssid, name, security, stage: Stage::Joining };
                 if let Err(e) = self.join(&joined, &password) {
                     let _ = skyward_sys::kmsg(&format!("joining {} failed: {e:#}", joined.name));
@@ -371,7 +390,8 @@ impl Station {
             Err(e) => return self.lost(e),
         };
         for m in messages {
-            let Some(told) = supplicant::event(&m) else { continue };
+            let Some(told) = supplicant::event(&m) else { continue;
+            };
             match told {
                 Told::ScanResults => {
                     if let Err(e) = self.read_scan() {
@@ -397,14 +417,67 @@ impl Station {
         }
         self.state.networks = wlan::networks(&found);
         r.found = found;
+        self.reread_known();
+        self.join_known();
         Ok(())
     }
 
+    /// Read the keys the phone's own Wi-Fi settings keep, once its data is
+    /// open: a scan before that finds nothing.
+    fn reread_known(&mut self) {
+        if self.known.is_empty() {
+            for k in skyward_net::wlan::known() {
+                self.known.insert(k.ssid, k.key);
+            }
+        }
+    }
+
+    fn known_key(&self, ssid: &[u8]) -> Option<String> {
+        self.known.get(ssid).cloned()
+    }
+
+    /// Join the strongest network the phone's own settings keep a key for,
+    /// when nothing is joined: what the phone would have joined by itself.
+    fn join_known(&mut self) {
+        if self.state.joined.is_some() || !matches!(self.state.power, Power::On) || self.known.is_empty() {
+            return;
+        }
+        let best = self
+            .state
+            .networks
+            .iter()
+            .find(|n| self.known.contains_key(&n.ssid) && !matches!(n.security, Security::Open));
+        let Some(n) = best else { return };
+        let (ssid, name, security) = (n.ssid.clone(), n.name.clone(), n.security);
+        let Some(password) = self.known_key(&ssid) else { return };
+        let at = skyward_sys::kmsg(&format!("joining {name}, which the phone's settings keep a key for"));
+        let _ = at;
+        self.keyed = Some((name.clone(), password.clone()));
+        let mut joined = Joined { ssid, name, security, stage: Stage::Joining };
+        if let Err(e) = self.join(&joined, &password) {
+            let _ = skyward_sys::kmsg(&format!("joining {} failed: {e:#}", joined.name));
+            joined.stage = Stage::Failed;
+        }
+        self.state.joined = Some(joined);
+    }
+
     fn joining(&mut self, told: &Told) {
-        let Some(j) = &mut self.state.joined else { return };
+        let Some(j) = &mut self.state.joined else { return;
+        };
         match j.on(told) {
             Next::Show => {}
-            Next::Address => self.ask_address(),
+            Next::Address => {
+                // The phone's own settings learn the key the recovery
+                // joined with, so its system knows the network too.
+                if let Some((name, key)) = self.keyed.take() {
+                    match skyward_net::wlan::remember(&name, &key) {
+                        Ok(true) => { let _ = skyward_sys::kmsg(&format!("the phone's settings now keep the key for {name}")); }
+                        Ok(false) => {}
+                        Err(e) => { let _ = skyward_sys::kmsg(&format!("the phone's settings keep no key for {name}: {e}")); }
+                    }
+                }
+                self.ask_address()
+            }
             Next::Unaddress => self.unaddress(),
             Next::Forget => {
                 if let Some(r) = &self.running
@@ -519,7 +592,8 @@ impl Station {
         if self.running.as_ref().is_none_or(|r| r.probed != n) {
             return;
         }
-        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return };
+        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return;
+        };
         let _ = skyward_sys::kmsg(&format!("the network on {} {reach}", self.cfg.interface));
         link.reach = Some(reach);
     }
@@ -601,7 +675,8 @@ impl Station {
     fn poll_link(&mut self) {
         let Some(r) = &mut self.running else { return };
         r.polled_at = Instant::now();
-        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return };
+        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return;
+        };
         // A plain STATUS has Android's supplicant tell every listener again
         // that the network is connected; this one leaves that out.
         let (signal, status) = match (r.control.ask("SIGNAL_POLL"), r.control.ask("STATUS-NO_EVENTS")) {
@@ -656,7 +731,14 @@ fn place(file: &Firmware) -> Result<()> {
             skyward_block::mount::mount_ro(&Path::new(skyward_block::BY_NAME).join(partition), &at)?;
             let read = fs::read(at.join(&file.path)).with_context(|| format!("read {} on {partition}", file.path));
             skyward_block::mount::umount(&at)?;
-            read?
+            match read {
+                Ok(bytes) => bytes,
+                Err(e) if file.optional && e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {
+                    skyward_sys::kmsg(&format!("optional WLAN firmware {} absent; the driver supplies its default", file.name))?;
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
         }
     };
     fs::write(&to, bytes).with_context(|| format!("write {}", to.display()))

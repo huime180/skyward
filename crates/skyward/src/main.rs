@@ -14,6 +14,8 @@ mod decrypt;
 #[cfg(target_os = "android")]
 mod filework;
 #[cfg(target_os = "android")]
+mod firmware;
+#[cfg(target_os = "android")]
 mod haptics;
 #[cfg(target_os = "android")]
 mod input;
@@ -21,6 +23,7 @@ mod input;
 mod keys;
 #[cfg(target_os = "android")]
 mod merge;
+#[cfg(any(target_os = "android", test))]
 #[cfg(target_os = "android")]
 mod partwork;
 #[cfg(target_os = "android")]
@@ -37,6 +40,8 @@ mod services;
 mod settings;
 #[cfg(target_os = "android")]
 mod systems;
+#[cfg(target_os = "android")]
+mod root_work;
 #[cfg(target_os = "android")]
 mod ui;
 #[cfg(target_os = "android")]
@@ -80,6 +85,13 @@ enum Cmd {
     },
     /// Run as the recovery service (what init starts as /system/bin/recovery).
     Recovery,
+    /// Make firmware available and start the configured kernel processor
+    /// before init starts the recovery's hardware services.
+    #[cfg(target_os = "android")]
+    Firmware {
+        #[arg(long, default_value = "/skyward/device.toml")]
+        config: String,
+    },
     /// Reboot through init: system, recovery, fastboot, bootloader, edl, or
     /// off.
     Reboot { target: String },
@@ -116,6 +128,8 @@ enum Cmd {
     /// merge where it has not begun, and follow it to its end.
     #[cfg(target_os = "android")]
     Merge,
+    /// Keep the configuration's services that this phone runs going until
+    /// stopped.
     /// Keep the configuration's programs that this phone runs, and those
     /// its partitions name for its keys, going until stopped.
     #[cfg(target_os = "android")]
@@ -248,6 +262,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Recovery => recovery(),
+        #[cfg(target_os = "android")]
+        Cmd::Firmware { config } => {
+            let cfg = DeviceConfig::load(config)?;
+            firmware::start(cfg.firmware.as_ref().context("the configuration names no firmware partition")?)
+        },
         Cmd::Reboot { target } => {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
@@ -289,7 +308,8 @@ fn main() -> Result<()> {
         Cmd::Services { config } => {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
-            let services: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
+            let cfg = DeviceConfig::load(&config)?;
+            let services: Vec<Started> = cfg.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
             keys::start(&keys::found(slot, libraries.as_deref())?.steps?)?;
@@ -750,6 +770,11 @@ fn recovery() -> Result<()> {
         std::fs::set_permissions(skyward_sys::RUN, std::fs::Permissions::from_mode(0o755))
             .with_context(|| format!("open {} to the recovery's other users", skyward_sys::RUN))?;
         skyward_sys::keep_log(Path::new(skyward_sys::LOG))?;
+        let panic_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = skyward_sys::kmsg(&format!("recovery panic: {info}"));
+            panic_hook(info);
+        }));
         // A recovery that ended with a function of its own in the port took
         // the port with it; going through "none" takes that function off.
         if skyward_sys::prop("sys.usb.state").is_some_and(|s| s != "adb") {

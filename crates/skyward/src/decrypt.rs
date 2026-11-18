@@ -34,7 +34,12 @@ impl Decryptor {
     pub fn start(job: Job) -> Result<Decryptor> {
         let worker = Worker::start("decrypt", move |tell| {
             tell.tell(match job {
-                Job::Open => Ended::Opened(with_key_service(data::open_without_credential)),
+                Job::Open => {
+        let at = std::time::Instant::now();
+        let done = with_key_service(data::open_without_credential);
+        let _ = skyward_sys::kmsg(&format!("decrypt: reading the lock took {} ms", at.elapsed().as_millis()));
+        Ended::Opened(done)
+    }
                 Job::Unlock { closed, user, credential } => {
                     Ended::Unlocked(with_key_service(|service| data::unlock(service, &closed, user, &credential)))
                 }
