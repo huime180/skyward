@@ -62,11 +62,11 @@ impl ManagerWay {
     /// What the page calls it, in the bar that starts the patch.
     pub fn name(self, l: Lang) -> &'static str {
         match self {
-            ManagerWay::None => l.pick(["未选择", "未選擇", "none"]),
-            ManagerWay::LastUsed => l.pick(["上次使用的管理器", "上次使用的管理器", "The manager used last time"]),
-            ManagerWay::Installed => l.pick(["从已安装管理器中选择", "從已安裝管理器中選擇", "An installed manager"]),
-            ManagerWay::Storage => l.pick(["从内部存储选择", "從內部儲存空間選擇", "From internal storage"]),
-            ManagerWay::Download => l.pick(["网络下载", "網路下載", "Downloaded"]),
+            ManagerWay::None => l.among("未选择", "未選擇", "none"),
+            ManagerWay::LastUsed => l.among("上次使用的管理器", "上次使用的管理器", "The manager used last time"),
+            ManagerWay::Installed => l.among("从已安装管理器中选择", "從已安裝管理器中選擇", "An installed manager"),
+            ManagerWay::Storage => l.among("从内部存储选择", "從內部儲存空間選擇", "From internal storage"),
+            ManagerWay::Download => l.among("网络下载", "網路下載", "Downloaded"),
         }
     }
 }
@@ -89,10 +89,10 @@ impl ImageWay {
     /// What the page calls it, in the bar that starts the patch.
     pub fn name(self, l: Lang) -> &'static str {
         match self {
-            ImageWay::None => l.pick(["未选择", "未選擇", "none"]),
-            ImageWay::Direct => l.pick(["本机镜像", "本機鏡像", "This phone's image"]),
-            ImageWay::File => l.pick(["选择镜像文件进行修补", "選擇映像檔進行修補", "An image file"]),
-            ImageWay::Package => l.pick(["从完整系统包解析", "從完整系統包解析", "A system package"]),
+            ImageWay::None => l.among("未选择", "未選擇", "none"),
+            ImageWay::Direct => l.among("本机镜像", "本機鏡像", "This phone's image"),
+            ImageWay::File => l.among("选择镜像文件进行修补", "選擇映像檔進行修補", "An image file"),
+            ImageWay::Package => l.among("从完整系统包解析", "從完整系統包解析", "A system package"),
         }
     }
 }

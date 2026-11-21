@@ -485,7 +485,7 @@ impl App {
                 if done {
                     fx.extend(self.confirmed(which, now));
                 } else {
-                    self.say(self.state.lang.pick(["请按住电源键", "請按住電源鍵", "Hold the power key"]), now);
+                    self.say(self.state.lang.among("请按住电源键", "請按住電源鍵", "Hold the power key"), now);
                 }
             }
             Press::Volume { .. } | Press::Spent => {}
@@ -556,11 +556,7 @@ impl App {
             || matches!(self.state.data, Data::Opening | Data::Locked { checking: true, .. })
         {
             self.say(
-                self.state.lang.pick([
-                    "请先完成当前操作或返回",
-                    "請先完成目前操作或返回",
-                    "Finish this operation or go back first",
-                ]),
+                self.state.lang.among("请先完成当前操作或返回", "請先完成目前操作或返回", "Finish this operation or go back first"),
                 now,
             );
             return Vec::new();

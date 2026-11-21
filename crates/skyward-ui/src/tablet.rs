@@ -5,12 +5,12 @@ use crate::color::{mix, Rgba};
 use crate::font::Fonts;
 use crate::geom::Rect;
 use crate::icons::Icon;
-use crate::lang::{Lang, Text};
+use crate::lang::Lang;
 use crate::pages::{BLUE, GREEN, ORANGE, PURPLE, RED, SLATE};
 use crate::theme::Theme;
 use crate::widgets::{self, Row, Trail};
 
-const SECTIONS: &[(Screen, Text, Icon)] = &[
+const SECTIONS: &[(Screen, [&str; 3], Icon)] = &[
     (Screen::About, ["我的设备", "我的裝置", "My device"], Icon::Phone),
     (Screen::Search, ["搜索", "搜尋", "Search"], Icon::More),
     (Screen::Wlan, ["WLAN", "Wi-Fi", "Wi-Fi"], Icon::Wlan),
@@ -101,7 +101,7 @@ impl Tablet {
             let search = Rect::new(18.0*d, 148.0*d, self.width as f32 - 36.0*d, 42.0*d);
             widgets::search_bar(c, &t, search, 1.0);
             let words = widgets::search_words(&t, f, search,
-                l.pick(["搜索功能与分区", "搜尋功能與分區", "Search recovery"]));
+                l.among("搜索功能与分区", "搜尋功能與分區", "Search recovery"));
             c.lay(&words, search.x.floor() as i32, search.y.floor() as i32, 1.0);
             let top = 202.0*d;
             self.hits.clear();
@@ -123,15 +123,15 @@ impl Tablet {
                     Screen::Wlan => app.state.wlan.as_ref().map(|w| crate::fmt::wlan_value(l, w).to_string()),
                     Screen::Systems => match &app.state.systems {
                         Some(Ok(sys)) => Some(match &sys.other {
-                            None => l.pick(["未安装第二系统", "未安裝第二系統", "No second system"]).to_string(),
+                            None => l.among("未安装第二系统", "未安裝第二系統", "No second system").to_string(),
                             Some(_) => sys.installed.name.clone(),
                         }),
                         _ => None,
                     },
                     Screen::Decrypt => Some(if matches!(app.state.data, crate::app::Data::Open) {
-                        l.pick(["已解密", "已解密", "Decrypted"]).to_string()
+                        l.among("已解密", "已解密", "Decrypted").to_string()
                     } else {
-                        l.pick(["未解密", "未解密", "Not decrypted"]).to_string()
+                        l.among("未解密", "未解密", "Not decrypted").to_string()
                     }),
                     _ => None,
                 }
@@ -162,7 +162,7 @@ impl Tablet {
                         Screen::Wlan | Screen::Backup | Screen::Decrypt => BLUE,
                         _ => SLATE,
                     };
-                    let mut row = Row::new(l.pick(title)).icon(color, icon);
+                    let mut row = Row::new(l.among(title[0], title[1], title[2])).icon(color, icon);
                     if let Some(hint) = hints[first + index].as_deref() {
                         row = row.trail(Trail::Value(hint));
                     }

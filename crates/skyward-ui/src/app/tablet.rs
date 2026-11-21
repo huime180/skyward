@@ -111,7 +111,7 @@ use skyward_info::Charge;
         app.touch(Touch::Down(x, cy), &f, 1200);
         app.touch(Touch::Up, &f, 1210);
         assert_eq!(app.state.brightness, MIN_BRIGHTNESS, "a touch at the left end sets the slider's floor");
-        assert!(search::find_available("vibr", Lang::En, |_| true, app.state.supports_vibration).is_empty());
+        assert!(search::find_on("vibr", Lang::En, |_| true).is_empty());
         app.back(1300);
         assert_eq!(app.screen(), Screen::Settings, "back cannot expose the phone home menu");
         app.stack.push((Screen::Installing, 0.0, Focus::Unset));
