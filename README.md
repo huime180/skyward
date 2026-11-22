@@ -42,7 +42,7 @@ read and set properties.
 
 ### Backup and restore
 
-![Back up the system, apps and IMEI](slides/en/out/06-backup.png)
+![Back up the system, apps, photos and IMEI](slides/en/out/06-backup.png)
 
 ### File manager
 
