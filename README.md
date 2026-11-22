@@ -96,7 +96,7 @@ read and set properties.
 | Xiaomi 17 Ultra | `nezha` | OS4.0.4.0.XPACNXM (Android 17) |
 | Redmi K100 Pro Max | `songyuan` | OS4.0.5.0.XGNCNXM (Android 17) |
 | Xiaomi 13 Ultra | `ishtar` | OS3.0.308.0.WMACNXM (Android 16) |
-| Xiaomi Pad 8 Pro | `piano` | OS4.0.5.0.XPYCNXM (Android 17) |
+| REDMI K60 Pro | `socrates` | OS4.0.0.24.XMKCNXM (Android 17) |
 
 ### 🚧 Under construction
 
