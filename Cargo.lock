@@ -2565,6 +2565,7 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "libc",
+ "prost",
  "rsproperties",
  "skyward-block",
  "skyward-config",
