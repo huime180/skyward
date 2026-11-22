@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 abootimg-oxide = "0.5.2"
+android-sparse-image = "0.2.0"
 anyhow = { workspace = true }
 cms = "0.2.3"
 cpio = "0.4.1"
@@ -24,6 +25,7 @@ skyward-block = { path = "../skyward-block" }
 skyward-config = { path = "../skyward-config" }
 skyward-info = { path = "../skyward-info" }
 skyward-root = { path = "../skyward-root" }
+skyward-lp = { path = "../skyward-lp" }
 skyward-sys = { path = "../skyward-sys" }
 skyward-systems = { path = "../skyward-systems" }
 skyward-vab = { path = "../skyward-vab" }
