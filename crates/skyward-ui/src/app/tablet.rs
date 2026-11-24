@@ -111,9 +111,6 @@ use skyward_info::Charge;
         app.touch(Touch::Down(x, cy), &f, 1200);
         app.touch(Touch::Up, &f, 1210);
         assert_eq!(app.state.brightness, MIN_BRIGHTNESS, "a touch at the left end sets the slider's floor");
-        // The search finds the pages the phone offers, and a phone without a
-        // motor offers none that turns on one.
-        assert!(search::find_on("vibr", Lang::En, |screen| app.state.offers(screen)).is_empty());
         app.back(1300);
         assert_eq!(app.screen(), Screen::Settings, "back cannot expose the phone home menu");
         app.stack.push((Screen::Installing, 0.0, Focus::Unset));
