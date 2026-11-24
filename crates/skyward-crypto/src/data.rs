@@ -360,15 +360,7 @@ const PROTECTORS: &str = "/data/system_de";
 /// so this reads it rather than guess.
 fn protector(user: u32) -> Result<crate::user::Protector> {
     let dir = blobs(user);
-    let mut ids = Vec::new();
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
-        let path = entry.with_context(|| format!("read {}", dir.display()))?.path();
-        if path.extension().is_some_and(|e| e == "spblob")
-            && let Some(id) = path.file_stem().and_then(|s| s.to_str())
-        {
-            ids.push(id.to_string());
-        }
-    }
+    let ids = blob_ids(&dir)?;
     let id = match crate::locksettings::current_protector(Path::new(crate::locksettings::DATABASE), user)? {
         Some(recorded) => {
             anyhow::ensure!(
@@ -390,6 +382,51 @@ fn protector(user: u32) -> Result<crate::user::Protector> {
             ),
         },
     };
+    protector_of(&dir, &id)
+}
+
+/// Every blob the phone keeps for `user`, the one it records as the one the
+/// user's own credential opens first: a phone keeps more than one for a
+/// while after a screen lock is changed with a fingerprint enrolled, and a
+/// weaver that will not part with one of them says nothing of the others.
+fn protectors(user: u32) -> Result<Vec<crate::user::Protector>> {
+    let dir = blobs(user);
+    let mut ids = blob_ids(&dir)?;
+    if let Some(recorded) = crate::locksettings::current_protector(Path::new(crate::locksettings::DATABASE), user)?
+        && let Some(at) = ids.iter().position(|id| *id == recorded)
+    {
+        let first = ids.remove(at);
+        ids.insert(0, first);
+    }
+    let mut all = Vec::new();
+    for id in ids {
+        match protector_of(&dir, &id) {
+            Ok(protector) => all.push(protector),
+            Err(e) => {
+                eprintln!("the blob {id} of user {user} is not read: {e:#}");
+            }
+        }
+    }
+    anyhow::ensure!(!all.is_empty(), "{} holds nothing of user {user}'s", dir.display());
+    Ok(all)
+}
+
+/// The names of the blobs the phone keeps in `dir`.
+fn blob_ids(dir: &Path) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let path = entry.with_context(|| format!("read {}", dir.display()))?.path();
+        if path.extension().is_some_and(|e| e == "spblob")
+            && let Some(id) = path.file_stem().and_then(|s| s.to_str())
+        {
+            ids.push(id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
+/// What the blob `id` in `dir` keeps the user's secret behind.
+fn protector_of(dir: &Path, id: &str) -> Result<crate::user::Protector> {
     // A user who has set a screen lock has what the phone recorded about
     // it beside the blob; a user who has set none has nothing there.
     let recorded = dir.join(format!("{id}.pwd"));
@@ -411,7 +448,7 @@ fn protector(user: u32) -> Result<crate::user::Protector> {
     Ok(crate::user::Protector {
         blob: std::fs::read(dir.join(format!("{id}.spblob"))).with_context(|| format!("read the blob in {}", dir.display()))?,
         bound,
-        id,
+        id: id.to_string(),
         lock,
     })
 }
@@ -493,7 +530,23 @@ const TAG_BYTES: usize = 16;
 /// owner's own secret gave. The owner's files open, their shared storage
 /// shows at /sdcard.
 fn open_user_files(service: &KeyMint, user: u32, credential: Option<&[u8]>, owner: Option<&Token>) -> Result<Note> {
-    let protector = protector(user)?;
+    // A phone may keep more than one blob for a user, and one of them can be
+    // the one a weaver will not part with: each is tried, the one the phone
+    // records first.
+    let mut said = None;
+    for protector in protectors(user)? {
+        match open_user_files_behind(service, user, &protector, credential, owner) {
+            Ok(note) => return Ok(note),
+            Err(e) => {
+                eprintln!("the blob {} of user {user} does not open their files: {e:#}", protector.id);
+                said = Some(e);
+            }
+        }
+    }
+    Err(said.unwrap_or_else(|| anyhow::anyhow!("user {user} has no blob to open their files with")))
+}
+
+fn open_user_files_behind(service: &KeyMint, user: u32, protector: &crate::user::Protector, credential: Option<&[u8]>, owner: Option<&Token>) -> Result<Note> {
     let stretched = match &protector.lock {
         Some(lock) => {
             let typed = match made_up_credential(service, user, &protector.id, owner)? {
