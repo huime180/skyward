@@ -199,20 +199,16 @@ pub struct Inputs {
     touch: TouchConfig,
     /// When the touchscreen was last told what it is told, so that what its
     /// driver reports as it takes the words is not taken for a finger.
-    told_at: Option<Instant>,
+    settled_until: Option<Instant>,
     w: f32,
     h: f32,
 }
 
 
-/// How long after the touchscreen is told what it is told its driver's own
-/// reports are taken for nothing.
-const SETTLE: Duration = Duration::from_millis(400);
-
 impl Inputs {
     /// Tell the touchscreen again what it is told when it is taken in: a
     /// driver that slept with the panel is woken by the same words.
-    pub fn rearm(&mut self) -> anyhow::Result<()> {
+    pub fn rearm(&mut self, silence: Duration) -> anyhow::Result<()> {
         let mut told = Vec::new();
         for w in &self.touch.writes {
             match std::fs::write(&w.path, &w.value) {
@@ -224,7 +220,7 @@ impl Inputs {
         // A driver taking the words may report a touch of its own as it
         // does, which would light the panel the words were meant to let
         // sleep: what it queues just after is dropped.
-        self.told_at = Some(Instant::now());
+        self.settled_until = Some(Instant::now() + silence);
         Ok(())
     }
 
@@ -250,7 +246,7 @@ impl Inputs {
             buttons: Vec::new(),
             seen: HashSet::new(),
             touch,
-            told_at: None,
+            settled_until: None,
             w: w as f32,
             h: h as f32,
         };
@@ -386,7 +382,7 @@ impl Inputs {
         }
         // What the touchscreen's driver reports as it is told the words
         // again is not a finger on the glass.
-        if self.told_at.is_some_and(|at| at.elapsed() < SETTLE) {
+        if self.settled_until.is_some_and(|until| Instant::now() < until) {
             out.clear();
         }
         Ok(out)

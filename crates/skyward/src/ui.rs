@@ -1765,14 +1765,17 @@ impl<'a> Pages<'a> {
                 shown = true;
             }
             if self.blanked {
-                self.inputs.rearm()?;
+                self.inputs.rearm(Duration::from_millis(400))?;
                 self.arm_at = Some(Instant::now() + Duration::from_secs(1));
             }
             self.blanked = false;
         } else if !self.blanked {
             // The touchscreen is told what it is told when it is taken in,
             // as the panel goes dark.
-            self.inputs.rearm()?;
+            // The driver reports a touch or two of its own as it takes the
+            // words, some seconds after: a panel told to sleep does not
+            // wake to them.
+            self.inputs.rearm(Duration::from_secs(8))?;
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
             // above zero rather than cutting it shows nothing as it goes off.
@@ -1782,7 +1785,7 @@ impl<'a> Pages<'a> {
             self.blanked = true;
         }
         if self.arm_at.is_some_and(|at| Instant::now() >= at) {
-            self.inputs.rearm()?;
+            self.inputs.rearm(Duration::from_millis(400))?;
             self.arm_at = None;
         }
         // After the frame is on the panel, so a panel coming back on lights
