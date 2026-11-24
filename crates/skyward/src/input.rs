@@ -10,6 +10,7 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 pub enum Event {
     /// A touch and when the panel reported it, on [`monotonic_ms`]'s clock.
@@ -196,10 +197,17 @@ pub struct Inputs {
     seen: HashSet<PathBuf>,
     /// What the touchscreen is told each time its panel is taken in.
     touch: TouchConfig,
+    /// When the touchscreen was last told what it is told, so that what its
+    /// driver reports as it takes the words is not taken for a finger.
+    told_at: Option<Instant>,
     w: f32,
     h: f32,
 }
 
+
+/// How long after the touchscreen is told what it is told its driver's own
+/// reports are taken for nothing.
+const SETTLE: Duration = Duration::from_millis(400);
 
 impl Inputs {
     /// Tell the touchscreen again what it is told when it is taken in: a
@@ -213,6 +221,10 @@ impl Inputs {
             }
         }
         skyward_sys::kmsg(&format!("touchscreen told again: {}", told.join(" ")))?;
+        // A driver taking the words may report a touch of its own as it
+        // does, which would light the panel the words were meant to let
+        // sleep: what it queues just after is dropped.
+        self.told_at = Some(Instant::now());
         Ok(())
     }
 
@@ -238,6 +250,7 @@ impl Inputs {
             buttons: Vec::new(),
             seen: HashSet::new(),
             touch,
+            told_at: None,
             w: w as f32,
             h: h as f32,
         };
@@ -370,6 +383,11 @@ impl Inputs {
         for i in removed.into_iter().rev() {
             let (path, _) = self.buttons.remove(i);
             self.seen.remove(&path);
+        }
+        // What the touchscreen's driver reports as it is told the words
+        // again is not a finger on the glass.
+        if self.told_at.is_some_and(|at| at.elapsed() < SETTLE) {
+            out.clear();
         }
         Ok(out)
     }
