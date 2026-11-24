@@ -35,7 +35,7 @@ use skyward_info::Charge;
         let mut app = App::new(Screen::Installing, 3048, 2032, 2.5);
         app.configure_device(&cfg);
         app.state.code = "123456".into();
-        app.state.install = Install::Flashing { partition: "system", stage: None };
+        app.state.install = Install::Flashing { partition: "system".to_string(), stage: None };
         for (width, height) in [(2032, 3048), (3048, 2032), (2032, 3048)] {
             app.resize(width, height);
             assert!(app.tablet_mode);
@@ -43,7 +43,7 @@ use skyward_info::Charge;
             assert_eq!(app.h, height);
             assert_eq!(app.screen(), Screen::Installing);
             assert_eq!(app.state.code, "123456");
-            assert!(matches!(app.state.install, Install::Flashing { partition: "system", .. }));
+            assert!(matches!(&app.state.install, Install::Flashing { partition, .. } if partition == "system"));
             app.resize(width, height);
             assert_eq!(app.w, width - width / 3);
         }
@@ -115,7 +115,7 @@ use skyward_info::Charge;
         app.back(1300);
         assert_eq!(app.screen(), Screen::Settings, "back cannot expose the phone home menu");
         app.stack.push((Screen::Installing, 0.0, Focus::Unset));
-        app.state.install = Install::Flashing { partition: "recovery", stage: None };
+        app.state.install = Install::Flashing { partition: "recovery".to_string(), stage: None };
         assert!(app.tablet_section(Screen::Wipe, 1400).is_empty());
         assert_eq!(app.screen(), Screen::Installing, "sidebar navigation cannot leave partition writes");
     }
