@@ -1772,10 +1772,11 @@ impl<'a> Pages<'a> {
         } else if !self.blanked {
             // The touchscreen is told what it is told when it is taken in,
             // as the panel goes dark.
-            // The driver reports a touch or two of its own as it takes the
-            // words, some seconds after: a panel told to sleep does not
-            // wake to them.
-            self.inputs.rearm(Duration::from_secs(8))?;
+            // The touchscreen is not told again as the panel goes dark: its
+            // driver reports a touch of its own as it takes the words, and
+            // the panel it was told to sleep wakes to it. The words are
+            // said again as the panel comes up, which is what the driver
+            // that slept with it needs.
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight
             // above zero rather than cutting it shows nothing as it goes off.
